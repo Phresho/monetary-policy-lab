@@ -1,0 +1,10 @@
+# Python packages for the backend (versions as tested on the Mac, 5 Nov 2026).
+# The circuit solver also needs the ngspice shared library (libngspice), see README "Hosting".
+fastapi==0.162.0
+uvicorn==0.54.0
+numpy==2.5.4
+scipy==1.18.1
+pydantic==2.14.2
+PySpice==1.5
+httpx==0.28.1   # tests only
+pytest          # tests only
