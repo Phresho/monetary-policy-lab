@@ -1,6 +1,8 @@
 import { useMemo, useState } from 'react';
 import { Plot } from './Plot';
 import { useTheme } from './viz';
+import { SweepMap } from './SweepMap';
+import { Scenario } from './types';
 
 interface Bode { mag_db: number[]; phase_deg: number[] }
 interface Pole { re: number; im: number; cycle_yr: number | null; half_life_yr: number | null }
@@ -20,7 +22,7 @@ const LOGX = { type: 'log', title: { text: 'frequency (rad/yr)' }, exponentforma
 const fmt = (v: number | null | undefined, d = 1) => v == null || !isFinite(v) ? '–' : v.toFixed(d);
 const cyc = (v: number) => v >= 1 ? `${v.toFixed(1)} yr` : v >= 1 / 12 ? `${(v * 12).toFixed(1)} months` : `${(v * 365).toFixed(0)} days`;
 
-export function Analysis({ a, busy, tOp, setTOp, closedMode }: { a?: AnalysisResult; busy: boolean; tOp: number; setTOp: (v: number) => void; closedMode: boolean }) {
+export function Analysis({ a, busy, tOp, setTOp, closedMode, scenario, onPick }: { a?: AnalysisResult; busy: boolean; tOp: number; setTOp: (v: number) => void; closedMode: boolean; scenario: Scenario; onPick: (ki: number, kd: number) => void }) {
   const [show, setShow] = useState({ loop: true, plant: false, ctrl: false });
   const [other, setOther] = useState('I(GDP_real)');
   const th = useTheme();
@@ -70,6 +72,8 @@ export function Analysis({ a, busy, tOp, setTOp, closedMode }: { a?: AnalysisRes
       <div className="kpi"><span>Gain margin</span><strong>{fmt(gm?.gm_db)} <em>dB</em></strong><small>{gm ? `at a cycle of ${cyc(gm.cycle_yr)}` : 'phase never reaches −180°'}</small></div>
       <div className="kpi"><span>Peak sensitivity Ms</span><strong>{fmt(m.ms, 2)}</strong><small>{m.ms < 2 ? 'robust (< 2)' : 'shocks near that cycle are amplified ×' + fmt(m.ms, 1)}; rule of thumb Ms &lt; 2</small></div>
     </div>
+
+    <SweepMap scenario={scenario} tOp={tOp} onPick={onPick}/>
 
     <div className="panel">
       <div className="pick-row">

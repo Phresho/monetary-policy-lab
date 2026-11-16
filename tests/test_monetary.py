@@ -171,3 +171,31 @@ def test_sectors_and_links():
     assert ("Retail banks", "Wholesale banks", "flow") in pairs           # the loan chain
     assert ("Central Bank", "Interest Rates", "signal") in pairs          # R feeds the rates
     assert not any("0" in l["via"] for l in m["links"])                   # ground is not a flow
+
+
+# ---------------------------------------------------------------- flows between sectors and the robustness map
+from monetary import flows
+
+
+def test_sector_flows_balance_at_every_shared_node():
+    """Kirchhoff: what the sectors push into a shared node adds up to zero (up to the solver's tolerance)."""
+    f = flows.sector_flows(Scenario())
+    assert len(f["nodes"]) >= 10 and len(f["years"]) > 40
+    for n in f["nodes"]:
+        total = np.sum([v for v in n["push"].values()], axis=0)
+        scale = max(np.abs(v).max() for v in n["push"].values())
+        assert np.abs(total).max() <= 1e-3 * max(scale, 1e-6), n["node"]
+    goods = next(n for n in f["nodes"] if n["node"] == "Goods")
+    assert goods["push"]["Domestic goods producers"][20] > 0 > goods["push"]["NFC"][20]  # producers deliver goods
+
+
+def test_sweep_matches_the_full_analysis():
+    """The netlist gains are unstable, Kp = Ki = 0.02 with Kd = 0 is stable; the map agrees with analyze()."""
+    s = Scenario(closed=True, kp=0.02, ki=0.02, kd=0)
+    m = fr.sweep(s, 0, ki_max=0.04, kd_max=1.0, n=5)
+    assert m["ki"][2] == pytest.approx(0.02) and m["kd"][0] == 0
+    assert m["verdict"][0][2] == fr.analyze(s, 0)["verdict"]
+    assert m["ms"][0][2] == pytest.approx(fr.analyze(s, 0)["margins"]["ms"], rel=1e-3)
+    bad = Scenario(closed=True)
+    mb = fr.sweep(bad, 0, ki_max=bad.ki, kd_max=bad.kd, n=5)
+    assert mb["verdict"][-1][-1] == fr.analyze(bad, 0)["verdict"] == "unstable"

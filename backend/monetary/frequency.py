@@ -288,6 +288,41 @@ def step_response(A, B, Cout, t: np.ndarray) -> np.ndarray:
     return y
 
 
+def _verdict(cl_y: np.ndarray) -> tuple[str, np.ndarray]:
+    """'unstable' for a growing oscillation or fast growth, 'drift' for slow real growth modes (the economy's own
+    growth, not policy), else 'stable'. cl_y: closed-loop poles per year."""
+    fast_unstable = (cl_y.real > 1e-9) & ((np.abs(cl_y.imag) > 1e-9) | (cl_y.real >= DRIFT_PER_YEAR))
+    drift = (cl_y.real > 1e-9) & ~fast_unstable
+    return ("unstable" if fast_unstable.any() else ("drift" if drift.any() else "stable")), drift
+
+
+def sweep(s: Scenario, t_op_years: float = 0.0, ki_max: float = 2.0, kd_max: float = 10.0, n: int = 21) -> dict:
+    """Robustness map over Ki x Kd at the scenario's Kp: peak sensitivity Ms, phase margin and the linear verdict per
+    cell. Uses the plant and fit of the scenario (cached), so it costs no extra simulation. At t > 0 in closed loop the
+    plant itself depends on Ki and Kd (the trajectory changes); the map then keeps the current plant ('approx')."""
+    t_op = round(float(t_op_years) * UNITS_PER_YEAR, 3)
+    key = _plant_key(s, t_op).model_dump_json()
+    p = _plant(key, t_op)
+    w, P = p["w"], p["resp"][OUTPUT]
+    H = smoothing(w)
+    fit = _fit(key, t_op)
+    kis, kds = np.linspace(0, ki_max, n), np.linspace(0, kd_max, n)
+    ms = np.zeros((n, n)); pm = np.full((n, n), np.nan); verdict = [["" for _ in range(n)] for _ in range(n)]
+    for i, kd in enumerate(kds):          # rows: Kd, columns: Ki
+        for j, ki in enumerate(kis):
+            c = s.model_copy(update={"ki": float(ki), "kd": float(kd)})
+            L = -P * H * controller(c, w)
+            mg = margins(w, L)
+            ms[i, j] = mg["ms"]
+            if mg["pm"]:
+                pm[i, j] = mg["pm"]["pm_deg"]
+            A, _, _, _ = closed_loop(c, fit)
+            verdict[i][j] = _verdict(np.linalg.eigvals(A) * UNITS_PER_YEAR)[0]
+    return {"kp": s.kp, "ki": kis.round(4).tolist(), "kd": kds.round(4).tolist(), "ms": ms.round(3).tolist(),
+            "pm_deg": [[None if np.isnan(v) else round(float(v), 1) for v in row] for row in pm], "verdict": verdict,
+            "t_op_years": t_op_years, "approx": bool(s.closed and t_op > 0)}
+
+
 # ---------------------------------------------------------------- everything the page needs
 def analyze(s: Scenario, t_op_years: float = 0.0) -> dict:
     t_op = round(float(t_op_years) * UNITS_PER_YEAR, 3)
@@ -304,9 +339,7 @@ def analyze(s: Scenario, t_op_years: float = 0.0) -> dict:
     yrs = np.linspace(0, 12, 1441)
     step = step_response(A, B, Cout, yrs * UNITS_PER_YEAR)
     cl_y = cl * UNITS_PER_YEAR
-    fast_unstable = (cl_y.real > 1e-9) & ((np.abs(cl_y.imag) > 1e-9) | (cl_y.real >= DRIFT_PER_YEAR))
-    drift = (cl_y.real > 1e-9) & ~fast_unstable
-    verdict = "unstable" if fast_unstable.any() else ("drift" if drift.any() else "stable")
+    verdict, drift = _verdict(cl_y)
     y = UNITS_PER_YEAR
 
     def bode(z):

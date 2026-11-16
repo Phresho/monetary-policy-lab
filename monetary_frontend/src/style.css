@@ -77,3 +77,21 @@ code { font-size:12.5px; background:var(--bg); padding:1px 4px; border-radius:4p
 .loopsvg .w { fill:none; stroke-width:2.6; } .loopsvg .w.on { stroke:var(--ink2); } .loopsvg .w.off { stroke:var(--axis); stroke-dasharray:6 5; }
 .links { display:grid; grid-template-columns:repeat(auto-fill,minmax(320px,1fr)); gap:4px 16px; margin-top:6px; font-size:13.5px; }
 .link .arrow { font-weight:700; margin:0 2px; } .link .arrow.signal { color:var(--warn); } .link .arrow.flow { color:var(--blue); }
+/* KPI tiles: value with a sparkline, delta against the first compared run (arrow + text, never colour alone) */
+.kpi-row { display:flex; align-items:center; gap:10px; } .kpi-row strong { flex:none; }
+.spark { flex:1; min-width:50px; height:30px; }
+.kpi .delta { color:var(--ink2); margin-top:2px; }
+/* transmission chain: numbered small multiples, read left to right, top to bottom */
+.chain { display:grid; grid-template-columns:repeat(auto-fit,minmax(300px,1fr)); gap:10px 18px; margin-top:8px; counter-reset:step; }
+.chain-step { position:relative; border-top:1px solid var(--line); padding-top:8px; min-width:0; }
+.chain-no { position:absolute; top:8px; left:-2px; display:grid; place-items:center; width:20px; height:20px; border-radius:50%; background:var(--bg); border:1px solid var(--line); font-size:12px; font-weight:650; color:var(--ink2); }
+.chain-step figcaption { padding-left:26px; }
+.chart figcaption.compact { font-size:14px; }
+.grid2.tight { gap:6px 18px; }
+/* tables */
+table.data th.left, table.data td.left { text-align:left; }
+table.data tr.active td { background:var(--blue-soft); }
+table.data td.small { font-size:12px; color:var(--ink2); white-space:normal; }
+.name-input { width:100%; min-width:180px; padding:3px 6px; border:1px solid transparent; border-radius:6px; background:none; color:var(--ink); font-size:12.5px; }
+.name-input:hover, .name-input:focus { border-color:var(--line); background:var(--panel); }
+.push { display:inline-flex; align-items:center; gap:4px; margin-right:10px; white-space:nowrap; }

@@ -1,23 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Analysis, AnalysisResult } from './Analysis';
 import { ModelMap } from './ModelMap';
+import { FlowsView } from './FlowsView';
+import { RunLibrary, SimView } from './SimView';
 import { api } from './api';
-import { Chart, Line, Marker } from './Chart';
-import { applyThemeChoice, seriesColor, storedThemeChoice, ThemeChoice, useTheme } from './viz';
+import { Marker } from './Chart';
+import { autoLabel, Catalogue, Run, SavedRun, Scenario } from './types';
+import { applyThemeChoice, storedThemeChoice, ThemeChoice } from './viz';
 
-interface Scenario {
-  name: string; closed: boolean; steady_start: boolean;
-  kp: number; ki: number; kd: number; derivative: 'filtered' | 'netlist'; tau_d: number;
-  r_star: number; target_pct: number; t_start: number;
-  rate_pct: number; step_pct: number; step_time: number;
-}
-interface Series { label: string; unit: string; values: number[] }
-interface Run {
-  scenario: Scenario; years: number[]; series: Record<string, Series>; seconds: number;
-  metrics: { inflation_rmse_pts: number; inflation_max_dev_pts: number; inflation_end_pct: number; rate_min_pct: number; rate_max_pct: number; gdp_growth_pct_per_year: number };
-}
-interface Catalogue { defaults: Scenario; netlist: Record<string, number>; series: { key: string; label: string; unit: string }[]; time: { units_per_year: number; t_stop: number }; solver: string | null }
-
+const MAX_RUNS = 8;
 
 function Slider({ label, value, min, max, step, onChange, hint, format = v => v.toFixed(2) }:
   { label: string; value: number; min: number; max: number; step: number; onChange: (v: number) => void; hint?: string; format?: (v: number) => string }) {
@@ -31,18 +22,18 @@ function Slider({ label, value, min, max, step, onChange, hint, format = v => v.
 export default function App() {
   const [cat, setCat] = useState<Catalogue>();
   const [s, setS] = useState<Scenario>();
-  const [run, setRun] = useState<Run>();
-  const [prev, setPrev] = useState<Run>();
+  const [runs, setRuns] = useState<SavedRun[]>([]);
+  const [activeId, setActiveId] = useState(0);
+  const [compareIds, setCompareIds] = useState<number[]>([]);
+  const nextId = useRef(1);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [extra, setExtra] = useState('I(Exchange_rate)');
-  const [showPrev, setShowPrev] = useState(true);
-  const [tab, setTab] = useState<'sim' | 'freq' | 'map'>('sim');
+  const [tab, setTab] = useState<'sim' | 'freq' | 'flows' | 'map'>('sim');
   const [an, setAn] = useState<AnalysisResult>();
   const [anBusy, setAnBusy] = useState(false);
   const [tOp, setTOp] = useState(0);
   const anSeq = useRef(0);
-  const t = useTheme();
   const [themeChoice, setThemeChoice] = useState<ThemeChoice>(storedThemeChoice);
   useEffect(() => applyThemeChoice(themeChoice), [themeChoice]);
 
@@ -66,32 +57,34 @@ export default function App() {
   const upy = cat?.time.units_per_year ?? 120;
   const set = (patch: Partial<Scenario>) => setS(old => old && { ...old, ...patch });
 
+  const run = runs.find(r => r.id === activeId);
+  const compared = useMemo(() => runs.filter(r => r.id !== activeId && compareIds.includes(r.id)), [runs, activeId, compareIds]);
+
+  // A new run becomes the active one; the run that was active is ticked for comparison (as the old "previous run").
   async function simulate(next = s) {
     if (!next) return;
     setBusy(true); setError('');
     try {
       const r = await api<Run>('/runs', next);
-      setPrev(run); setRun(r);
+      const id = nextId.current++;
+      setRuns(old => {
+        let all = [...old, { ...r, id, label: autoLabel(id, r.scenario) }];
+        while (all.length > MAX_RUNS) all = all.filter(x => x !== all.find(y => y.id !== id && y.id !== activeId) );
+        return all;
+      });
+      setCompareIds(activeId ? [activeId] : []);
+      setActiveId(id);
     } catch (e) { setError(e instanceof Error ? e.message : String(e)); }
     finally { setBusy(false); }
   }
-  useEffect(() => { if (s && !run && !busy) void simulate(s); }, [s]);  // first run with the defaults
+  useEffect(() => { if (s && !runs.length && !busy) void simulate(s); }, [s]);  // first run with the defaults
 
   const markers = useMemo<Marker[]>(() => {
     const sc = run?.scenario; if (!sc) return [];
     return sc.closed ? [{ x: sc.t_start / upy, label: ' rule fully on' }] : [{ x: sc.step_time / upy, label: ` rate step ${sc.step_pct >= 0 ? '+' : ''}${sc.step_pct}` }];
   }, [run, upy]);
 
-  // A series in its quantity's colour; the previous run as a grey dashed line (de-emphasis, not a second colour).
-  function lines(key: string, extraLines: Line[] = []): Line[] {
-    if (!run) return [];
-    const out: Line[] = [{ name: run.series[key].label + (prev && showPrev ? ' (this run)' : ''), x: run.years, y: run.series[key].values, color: seriesColor(t, key) }];
-    if (prev && showPrev && prev.series[key]) out.push({ name: 'previous run', x: prev.years, y: prev.series[key].values, color: t.muted, dash: 'dash', width: 1.5 });
-    return [...out, ...extraLines];
-  }
-
   if (!cat || !s) return <div className="startup">{error ? <p className="notice bad">{error}</p> : <p className="muted">Loading…</p>}</div>;
-  const m = run?.metrics;
   const nl = cat.netlist;
   return <>
     <header className="topbar">
@@ -130,7 +123,7 @@ export default function App() {
         </>}
         <label className="check"><input type="checkbox" checked={s.steady_start} onChange={e => set({ steady_start: e.target.checked })}/>Start in steady state</label>
         {!s.steady_start && <p className="notice warn">The netlist's own start: P jumps 0.13 → 0.27 and inflation spikes to ~26 000 % in the first months.</p>}
-        {tab === 'map' ? <p className="muted note">The map shows the traces of the last simulation run.</p> : tab === 'sim' ? <button className="primary" onClick={() => void simulate()} disabled={busy}>{busy ? 'Simulating… (10–15 s)' : 'Run simulation'}</button>
+        {tab === 'map' || tab === 'flows' ? <p className="muted note">{tab === 'map' ? 'The map shows the traces of the active run.' : 'The flows are those of the active run (Simulation tab).'}</p> : tab === 'sim' ? <button className="primary" onClick={() => void simulate()} disabled={busy}>{busy ? 'Simulating… (10–15 s)' : 'Run simulation'}</button>
           : <p className="muted note">The analysis updates by itself when you move a slider. Then try the gains in the Simulation tab.</p>}
         <p className="muted note">Time axis: 120 model time units = 1 year (assumed from the /120 in the interest flows).</p>
       </aside>
@@ -138,28 +131,20 @@ export default function App() {
         <div className="tabs" role="tablist">
           <button role="tab" aria-selected={tab === 'sim'} className={tab === 'sim' ? 'active' : ''} onClick={() => setTab('sim')}>Simulation</button>
           <button role="tab" aria-selected={tab === 'freq'} className={tab === 'freq' ? 'active' : ''} onClick={() => setTab('freq')}>Frequency analysis</button>
+          <button role="tab" aria-selected={tab === 'flows'} className={tab === 'flows' ? 'active' : ''} onClick={() => setTab('flows')}>Sector flows</button>
           <button role="tab" aria-selected={tab === 'map'} className={tab === 'map' ? 'active' : ''} onClick={() => setTab('map')}>Model map</button>
         </div>
         {error && <p className="notice bad">{error}</p>}
-        {tab === 'map' ? <ModelMap scenario={run?.scenario ?? s} closed={s.closed}/> : tab === 'freq' ? <Analysis a={an} busy={anBusy} tOp={tOp} setTOp={setTOp} closedMode={s.closed}/> : !run ? <div className="panel empty"><p className="muted">{busy ? 'Running the first simulation…' : 'No run yet.'}</p></div> : <>
-          <div className="kpis">
-            <div className="kpi"><span>Inflation vs target (RMS)</span><strong>{m!.inflation_rmse_pts.toFixed(2)} <em>pt</em></strong><small>largest deviation {m!.inflation_max_dev_pts.toFixed(1)} pt{run.scenario.closed ? ', after the rule is fully on' : ''}</small></div>
-            <div className="kpi"><span>Inflation at the end</span><strong>{m!.inflation_end_pct.toFixed(2)} <em>%</em></strong><small>target {run.scenario.target_pct} %</small></div>
-            <div className="kpi"><span>Policy rate range</span><strong>{m!.rate_min_pct.toFixed(2)}–{m!.rate_max_pct.toFixed(2)} <em>%</em></strong></div>
-            <div className="kpi"><span>Real GDP growth</span><strong>{m!.gdp_growth_pct_per_year.toFixed(2)} <em>%/yr</em></strong><small>run took {run.seconds} s</small></div>
-          </div>
-          {prev && <label className="check compare"><input type="checkbox" checked={showPrev} onChange={e => setShowPrev(e.target.checked)}/>Show previous run (dashed)</label>}
-          <div className="panel"><Chart title="Inflation" unit="%" markers={markers} lines={lines('I(CPI_filtered)', [{ name: 'target', x: run.years, y: run.series['I(Target_CPI)'].values, color: t.ink2, dash: 'dot', width: 1.5 }])}/></div>
-          <div className="grid2">
-            <div className="panel"><Chart title="Policy rate" unit="%" markers={markers} lines={lines('I(R)', run.scenario.closed ? [] : [{ name: 'rule would ask', x: run.years, y: run.series['V(n_pi)'].values, color: t.ink2, dash: 'dot', width: 1.5 }])}/></div>
-            <div className="panel"><Chart title="Real GDP" unit="per time unit" markers={markers} lines={lines('I(GDP_real)')}/></div>
-          </div>
-          <div className="panel">
-            <label className="pick">More signals <select value={extra} onChange={e => setExtra(e.target.value)}>
-              {cat.series.map(x => <option key={x.key} value={x.key}>{x.label}</option>)}
-            </select></label>
-            <Chart title={run.series[extra].label} unit={run.series[extra].unit} markers={markers} lines={lines(extra)}/>
-          </div>
+        {tab === 'map' ? <ModelMap scenario={run?.scenario ?? s} closed={s.closed}/>
+          : tab === 'flows' ? (run ? <FlowsView scenario={run.scenario}/> : <div className="panel empty"><p className="muted">Run a simulation first.</p></div>)
+          : tab === 'freq' ? <Analysis a={an} busy={anBusy} tOp={tOp} setTOp={setTOp} closedMode={s.closed} scenario={s} onPick={(ki, kd) => set({ ki, kd, closed: true })}/>
+          : !run ? <div className="panel empty"><p className="muted">{busy ? 'Running the first simulation…' : 'No run yet.'}</p></div> : <>
+          <SimView cat={cat} run={run} compared={compared} markers={markers} extra={extra} setExtra={setExtra}/>
+          <RunLibrary runs={runs} activeId={activeId} compareIds={compareIds}
+            setActive={id => { setActiveId(id); setCompareIds(c => c.filter(x => x !== id)); const r = runs.find(x => x.id === id); if (r) setS(r.scenario); }}
+            toggleCompare={id => setCompareIds(c => c.includes(id) ? c.filter(x => x !== id) : [...c, id])}
+            rename={(id, label) => setRuns(rs => rs.map(r => r.id === id ? { ...r, label } : r))}
+            remove={id => { setRuns(rs => rs.filter(r => r.id !== id)); setCompareIds(c => c.filter(x => x !== id)); if (id === activeId) { const rest = runs.filter(r => r.id !== id); setActiveId(rest[rest.length - 1]?.id ?? 0); } }}/>
         </>}
       </main>
     </div>

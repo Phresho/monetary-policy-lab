@@ -1,6 +1,8 @@
 // Chart colours and theme. Values from the dataviz reference palette; checked with validate_palette.js:
 // - quantities (inflation blue, rate orange, real economy aqua): categorical, all pairs PASS in light and dark;
-// - the four rates along the transmission chain (policy → wholesale → retail → long-term): one orange ordinal ramp, PASS.
+// - the four rates along the transmission chain (policy → wholesale → retail → long-term): one orange ordinal ramp that
+//   starts at the policy-rate colour, PASS (--ordinal) in both modes;
+// - Ms map: the blue sequential ramp; inflation gap: diverging blue (below target) / red (above) around a grey middle.
 // Colour follows the quantity, never the position in a chart. Reference lines (target, limits) use ink, not a series colour.
 // Status colours (good / critical) are only for the stability verdict and always come with an icon and a label.
 import { useEffect, useState } from 'react';
@@ -10,7 +12,8 @@ export type Mode = 'light' | 'dark';
 const THEMES = {
   light: {
     inflation: '#2a78d6', rate: '#eb6834', real: '#1baf7a',
-    rates: ['#f2a07b', '#eb6834', '#c24e1d', '#8a3510'],
+    rates: ['#eb6834', '#c24e1d', '#963a12', '#66260a'],
+    seq: ['#cde2fb', '#9ec5f4', '#6da7ec', '#3987e5', '#256abf', '#184f95', '#0d366b'],
     sectors: ['#2a78d6', '#eb6834', '#1baf7a', '#eda100', '#e87ba4', '#008300', '#6250d6', '#e34948'],
     below: '#2a78d6', above: '#e34948', mid: '#f0efec',
     good: '#0ca30c', critical: '#d03b3b', goodText: '#006300',
@@ -18,7 +21,8 @@ const THEMES = {
   },
   dark: {
     inflation: '#3987e5', rate: '#d95926', real: '#199e70',
-    rates: ['#f7b796', '#e8733f', '#c24e1d', '#9a3d14'],
+    rates: ['#d95926', '#e8733f', '#f29a70', '#f7c2a5'],
+    seq: ['#104281', '#184f95', '#256abf', '#3987e5', '#6da7ec', '#9ec5f4', '#cde2fb'],
     sectors: ['#3987e5', '#d95926', '#199e70', '#c98500', '#d55181', '#0ca30c', '#9085e9', '#e66767'],
     below: '#3987e5', above: '#e66767', mid: '#383835',
     good: '#0ca30c', critical: '#d03b3b', goodText: '#0ca30c',
@@ -28,14 +32,24 @@ const THEMES = {
 export type Theme = typeof THEMES.light;
 
 // Which quantity a series key belongs to (its colour everywhere in the app).
-const RATE_KEYS = ['I(R)', 'I(R_wholesale)', 'I(R_retail)', 'I(y_LT)'];
+export const RATE_KEYS = ['I(R)', 'I(R_wholesale)', 'I(R_retail)', 'I(y_LT)'];
 export function seriesColor(t: Theme, key: string): string {
   if (/CPI|I\(P\)/.test(key)) return t.inflation;
-  const r = RATE_KEYS.indexOf(key);
-  if (r >= 0) return r === 0 ? t.rate : t.rates[r];
-  if (key === 'V(n_pi)') return t.rate;
+  if (RATE_KEYS.includes(key) || key === 'V(n_pi)') return t.rate;
   if (/GDP|cons|Investment|Capital|wage|Labour/.test(key)) return t.real;
   return t.ink2;  // financial stocks and ratios: one series per chart, the title names it
+}
+
+// The eight economic sectors take the reference categorical slots in this order; group boxes (Banks, NFC), helper
+// boxes (Shock, CPI values, Interest Rates) and elements outside every box stay grey, so no ninth colour is needed.
+export const SECTOR_ORDER = ['Central Bank', 'Wholesale banks', 'Households', 'Retail banks', 'Domestic goods producers', 'Fiscal Authority', 'Capital producers', 'Foreign Sector'];
+export function sectorColor(t: Theme, name: string): string {
+  const i = SECTOR_ORDER.indexOf(name);
+  return i >= 0 ? t.sectors[i] : t.muted;
+}
+export function withAlpha(hex: string, a: number): string {
+  const n = parseInt(hex.slice(1), 16);
+  return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${a})`;
 }
 
 function systemDark() { return typeof matchMedia !== 'undefined' && matchMedia('(prefers-color-scheme: dark)').matches; }

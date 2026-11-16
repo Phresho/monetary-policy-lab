@@ -12,7 +12,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from . import ngspice as ng
-from .scenario import DEFAULTS, SERIES, T_STOP, UNITS_PER_YEAR, Scenario, run
+from .scenario import DEFAULTS, PHI_TARGET, SERIES, T_STOP, UNITS_PER_YEAR, Scenario, run
 
 ROOT = Path(__file__).resolve().parents[2]
 DIST = ROOT / "monetary_frontend" / "dist"
@@ -28,6 +28,14 @@ class AnalysisRequest(BaseModel):
     t_op_years: float = Field(0.0, ge=0, le=13)
 
 
+class SweepRequest(BaseModel):
+    scenario: Scenario
+    t_op_years: float = Field(0.0, ge=0, le=13)
+    ki_max: float = Field(2.0, gt=0, le=5)
+    kd_max: float = Field(10.0, gt=0, le=20)
+    n: int = Field(21, ge=5, le=41)
+
+
 class TraceRequest(BaseModel):
     scenario: Scenario
     element: str = Field(max_length=80)
@@ -41,7 +49,7 @@ def create_app() -> FastAPI:
     def catalogue():
         return {"defaults": Scenario().model_dump(), "netlist": DEFAULTS, "schema": Scenario.model_json_schema(),
                 "series": [{"key": k, "label": l, "unit": u} for k, l, u, _ in SERIES],
-                "time": {"units_per_year": UNITS_PER_YEAR, "t_stop": T_STOP}, "solver": "ngspice" if ng.available() else None}
+                "time": {"units_per_year": UNITS_PER_YEAR, "t_stop": T_STOP}, "phi_target": PHI_TARGET, "solver": "ngspice" if ng.available() else None}
 
     @app.post("/api/runs")
     def create_run(scenario: Scenario):  # FastAPI runs this in its thread pool
@@ -75,6 +83,24 @@ def create_app() -> FastAPI:
                 return frequency.analyze(request.scenario, request.t_op_years)
             except (RuntimeError, ValueError, OSError, np.linalg.LinAlgError) as error:
                 raise HTTPException(422, f"Analysis failed: {error}") from error
+
+    @app.post("/api/flows")
+    def flows(scenario: Scenario):
+        from . import flows as fl
+        with SLOTS:
+            try:
+                return fl.sector_flows(scenario)
+            except (RuntimeError, ValueError, OSError) as error:
+                raise HTTPException(422, f"Simulation failed: {error}") from error
+
+    @app.post("/api/sweep")
+    def sweep(request: SweepRequest):
+        from . import frequency
+        with SLOTS:
+            try:
+                return frequency.sweep(request.scenario, request.t_op_years, request.ki_max, request.kd_max, request.n)
+            except (RuntimeError, ValueError, OSError, np.linalg.LinAlgError) as error:
+                raise HTTPException(422, f"Sweep failed: {error}") from error
 
     if (DIST / "assets").exists():
         app.mount("/assets", StaticFiles(directory=DIST / "assets"), name="assets")

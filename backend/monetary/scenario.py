@@ -16,6 +16,7 @@ POINTS = 1601            # output grid: one point per time unit
 
 _P = ng.parse_params(nl.read_model())
 DEFAULTS = {"kp": _P["kp"], "ki": _P["ki"], "kd": _P["kd"], "r_star": _P["r_star"], "t_start": _P["t_start"]}
+PHI_TARGET = _P.get("phi_target")   # target bank leverage, a reference line in the balance-sheet panel
 
 
 class Scenario(BaseModel):
@@ -88,12 +89,17 @@ def _steady(key: str) -> steady.Steady:
 _RECENT: dict[str, dict] = {}   # scenario json -> all traces of the run (last few), for element plots on the map
 
 
-def element_trace(s: Scenario, element: str) -> dict:
-    """I(element) of the scenario's run on the output grid (runs the scenario if it is not among the recent ones)."""
+def recent_traces(s: Scenario) -> dict:
+    """All I() traces of the scenario's run (runs the scenario if it is not among the recent ones)."""
     key = s.model_copy(update={"name": ""}).model_dump_json()
     if key not in _RECENT:
         run(s)
-    traces = _RECENT[key]
+    return _RECENT[key]
+
+
+def element_trace(s: Scenario, element: str) -> dict:
+    """I(element) of the scenario's run on the output grid."""
+    traces = recent_traces(s)
     ref = element.split("§")[-1]
     hit = next((k for k in traces if k.lower() == f"i({ref.lower()})"), None)
     if hit is None:
