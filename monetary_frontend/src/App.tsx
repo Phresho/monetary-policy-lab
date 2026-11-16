@@ -3,6 +3,7 @@ import { Analysis, AnalysisResult } from './Analysis';
 import { ModelMap } from './ModelMap';
 import { api } from './api';
 import { Chart, Line, Marker } from './Chart';
+import { applyThemeChoice, seriesColor, storedThemeChoice, ThemeChoice, useTheme } from './viz';
 
 interface Scenario {
   name: string; closed: boolean; steady_start: boolean;
@@ -17,7 +18,6 @@ interface Run {
 }
 interface Catalogue { defaults: Scenario; netlist: Record<string, number>; series: { key: string; label: string; unit: string }[]; time: { units_per_year: number; t_stop: number }; solver: string | null }
 
-const C = { now: '#1f6fc4', prev: '#8a9692', target: '#3f9a1f', rule: '#b8741a' };
 
 function Slider({ label, value, min, max, step, onChange, hint, format = v => v.toFixed(2) }:
   { label: string; value: number; min: number; max: number; step: number; onChange: (v: number) => void; hint?: string; format?: (v: number) => string }) {
@@ -42,6 +42,9 @@ export default function App() {
   const [anBusy, setAnBusy] = useState(false);
   const [tOp, setTOp] = useState(0);
   const anSeq = useRef(0);
+  const t = useTheme();
+  const [themeChoice, setThemeChoice] = useState<ThemeChoice>(storedThemeChoice);
+  useEffect(() => applyThemeChoice(themeChoice), [themeChoice]);
 
   // Frequency tab: re-analyse 300 ms after the last change (the plant is cached, so gain changes are instant;
   // a new Kp, R* or year needs a new linearisation, 15-40 s). Only the latest request is shown.
@@ -79,10 +82,11 @@ export default function App() {
     return sc.closed ? [{ x: sc.t_start / upy, label: ' rule fully on' }] : [{ x: sc.step_time / upy, label: ` rate step ${sc.step_pct >= 0 ? '+' : ''}${sc.step_pct}` }];
   }, [run, upy]);
 
-  function lines(key: string, color = C.now, extraLines: Line[] = []): Line[] {
+  // A series in its quantity's colour; the previous run as a grey dashed line (de-emphasis, not a second colour).
+  function lines(key: string, extraLines: Line[] = []): Line[] {
     if (!run) return [];
-    const out: Line[] = [{ name: run.series[key].label + (prev && showPrev ? ' (this run)' : ''), x: run.years, y: run.series[key].values, color }];
-    if (prev && showPrev && prev.series[key]) out.push({ name: 'previous run', x: prev.years, y: prev.series[key].values, color: C.prev, dash: 'dash', width: 1.6 });
+    const out: Line[] = [{ name: run.series[key].label + (prev && showPrev ? ' (this run)' : ''), x: run.years, y: run.series[key].values, color: seriesColor(t, key) }];
+    if (prev && showPrev && prev.series[key]) out.push({ name: 'previous run', x: prev.years, y: prev.series[key].values, color: t.muted, dash: 'dash', width: 1.5 });
     return [...out, ...extraLines];
   }
 
@@ -95,6 +99,9 @@ export default function App() {
       <div className="top-actions">
         <span className={`mode ${s.closed ? 'closed' : 'open'}`}>{s.closed ? 'Closed loop: policy rule sets the rate' : 'Open loop: rate path given'}</span>
         <span className="muted small">solver: {cat.solver ?? 'not available'}</span>
+        <label className="theme-pick small">Theme <select value={themeChoice} onChange={e => setThemeChoice(e.target.value as ThemeChoice)}>
+          <option value="auto">System</option><option value="light">Light</option><option value="dark">Dark</option>
+        </select></label>
       </div>
     </header>
     <div className="layout">
@@ -142,9 +149,9 @@ export default function App() {
             <div className="kpi"><span>Real GDP growth</span><strong>{m!.gdp_growth_pct_per_year.toFixed(2)} <em>%/yr</em></strong><small>run took {run.seconds} s</small></div>
           </div>
           {prev && <label className="check compare"><input type="checkbox" checked={showPrev} onChange={e => setShowPrev(e.target.checked)}/>Show previous run (dashed)</label>}
-          <div className="panel"><Chart title="Inflation" unit="%" markers={markers} lines={lines('I(CPI_filtered)', C.now, [{ name: 'target', x: run.years, y: run.series['I(Target_CPI)'].values, color: C.target, dash: 'dot', width: 1.6 }])}/></div>
+          <div className="panel"><Chart title="Inflation" unit="%" markers={markers} lines={lines('I(CPI_filtered)', [{ name: 'target', x: run.years, y: run.series['I(Target_CPI)'].values, color: t.ink2, dash: 'dot', width: 1.5 }])}/></div>
           <div className="grid2">
-            <div className="panel"><Chart title="Policy rate" unit="%" markers={markers} lines={lines('I(R)', C.now, run.scenario.closed ? [] : [{ name: 'rule would ask', x: run.years, y: run.series['V(n_pi)'].values, color: C.rule, dash: 'dot', width: 1.4 }])}/></div>
+            <div className="panel"><Chart title="Policy rate" unit="%" markers={markers} lines={lines('I(R)', run.scenario.closed ? [] : [{ name: 'rule would ask', x: run.years, y: run.series['V(n_pi)'].values, color: t.ink2, dash: 'dot', width: 1.5 }])}/></div>
             <div className="panel"><Chart title="Real GDP" unit="per time unit" markers={markers} lines={lines('I(GDP_real)')}/></div>
           </div>
           <div className="panel">

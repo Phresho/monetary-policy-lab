@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { api } from './api';
 import { Chart } from './Chart';
+import { Theme, useTheme } from './viz';
 
 interface El { name: string; ref: string; symbol: string; kind: string; rot: string; x: number; y: number; pins: number[][]; sector: string | null; expr: string; nodes: string[] }
 interface Rect { x1: number; y1: number; x2: number; y2: number; title: string | null }
@@ -9,8 +10,12 @@ interface Link { from: string; to: string; kind: 'flow' | 'signal'; via: string[
 export interface MapData { bounds: number[]; wires: number[][]; flags: { x: number; y: number; name: string; ground: boolean }[]; rects: Rect[]; sectors: string[]; links: Link[]; texts: Txt[]; elements: El[] }
 interface Trace { element: string; trace: string; years: number[]; values: number[] }
 
-const PALETTE = ['#1f6fc4', '#3f9a1f', '#b8741a', '#8e44ad', '#c0392b', '#16a085', '#7f8c8d', '#d35400', '#2c3e50', '#27ae60', '#a93226', '#2471a3', '#9a7d0a'];
-const KIND_COLOR: Record<string, string> = { resistor: '#5c6b65', inductor: '#1f6fc4', capacitor: '#16a085', 'behavioural current': '#b8741a', 'behavioural voltage': '#8e44ad', 'current source': '#b8741a', 'voltage source': '#8e44ad' };
+// Sectors take the reference categorical slots in order (always named beside the colour: chips, link list);
+// element kinds the first slots too, named in the element panel.
+// The eight economic sectors, one slot each; group boxes (Banks, NFC) and helper boxes (Shock, CPI values,
+// Interest Rates) stay grey, so no ninth colour is needed.
+const SECTOR_ORDER = ['Central Bank', 'Wholesale banks', 'Households', 'Retail banks', 'Domestic goods producers', 'Fiscal Authority', 'Capital producers', 'Foreign Sector'];
+const kindColor = (t: Theme): Record<string, string> => ({ resistor: t.ink2, inductor: t.sectors[0], capacitor: t.sectors[2], 'behavioural current': t.sectors[1], 'current source': t.sectors[1], 'behavioural voltage': t.sectors[6], 'voltage source': t.sectors[6] });
 
 // Glyphs in LTspice symbol coordinates, between the symbol's pins (see backend/monetary/schematic.py PINS).
 function Glyph({ symbol }: { symbol: string }) {
@@ -72,10 +77,12 @@ export function ModelMap({ scenario, closed }: { scenario: unknown; closed: bool
   const [trace, setTrace] = useState<Trace>();
   const [traceBusy, setTraceBusy] = useState(false);
   const svg = useRef<SVGSVGElement>(null);
+  const t = useTheme();
+  const KIND_COLOR = kindColor(t);
   const drag = useRef<{ x: number; y: number; vb: number[]; moved: boolean } | null>(null);
 
   useEffect(() => { api<MapData>('/model/map').then(d => { setM(d); setVb(fit(d.bounds)); }).catch(e => setError(String(e.message ?? e))); }, []);
-  const colour = useMemo(() => Object.fromEntries((m?.sectors ?? []).map((s, i) => [s, PALETTE[i % PALETTE.length]])), [m]);
+  const colour = useMemo(() => Object.fromEntries((m?.sectors ?? []).map(s => { const i = SECTOR_ORDER.indexOf(s); return [s, i >= 0 ? t.sectors[i] : t.muted]; })), [m, t]);
   const el = m?.elements.find(e => e.name === sel);
   const s = scenario as { kp: number; ki: number; kd: number };
 
@@ -185,7 +192,7 @@ export function ModelMap({ scenario, closed }: { scenario: unknown; closed: bool
         {level === 'loop' && <button className="ghost" onClick={() => openElement(el.name)}>Show in the circuit</button>}
         {traceBusy ? <p className="muted note">Simulating the current scenario for this trace…</p>
           : trace ? <Chart title={trace.trace} unit={el.kind === 'inductor' || el.kind.includes('current') ? 'current (flow)' : 'value'} height={220}
-              lines={[{ name: trace.trace, x: trace.years, y: trace.values, color: KIND_COLOR[el.kind] ?? '#1f6fc4' }]}/>
+              lines={[{ name: trace.trace, x: trace.years, y: trace.values, color: KIND_COLOR[el.kind] ?? t.inflation }]} group={null}/>
           : <p className="muted note">No trace for this element.</p>}
       </>}
     </aside>

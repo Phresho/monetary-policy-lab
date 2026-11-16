@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react';
 import { Plot } from './Plot';
+import { useTheme } from './viz';
 
 interface Bode { mag_db: number[]; phase_deg: number[] }
 interface Pole { re: number; im: number; cycle_yr: number | null; half_life_yr: number | null }
@@ -15,7 +16,6 @@ export interface AnalysisResult {
   step: { years: number[]; inflation: number[]; rate: number[] };
 }
 
-const C = { loop: '#1f6fc4', plant: '#b8741a', ctrl: '#3f9a1f', fit: '#8a9692', s: '#a8321f', t: '#1f6fc4' };
 const LOGX = { type: 'log', title: { text: 'frequency (rad/yr)' }, exponentformat: 'power' };
 const fmt = (v: number | null | undefined, d = 1) => v == null || !isFinite(v) ? '–' : v.toFixed(d);
 const cyc = (v: number) => v >= 1 ? `${v.toFixed(1)} yr` : v >= 1 / 12 ? `${(v * 12).toFixed(1)} months` : `${(v * 365).toFixed(0)} days`;
@@ -23,6 +23,9 @@ const cyc = (v: number) => v >= 1 ? `${v.toFixed(1)} yr` : v >= 1 / 12 ? `${(v *
 export function Analysis({ a, busy, tOp, setTOp, closedMode }: { a?: AnalysisResult; busy: boolean; tOp: number; setTOp: (v: number) => void; closedMode: boolean }) {
   const [show, setShow] = useState({ loop: true, plant: false, ctrl: false });
   const [other, setOther] = useState('I(GDP_real)');
+  const th = useTheme();
+  // loop and |T| (inflation follows) blue, plant and |S| orange, rule aqua: the validated three-colour set.
+  const C = { loop: th.inflation, plant: th.rate, ctrl: th.real, fit: th.muted, s: th.rate, t: th.inflation };
 
   const hover = useMemo(() => a?.cycle_yr.map(cyc), [a]);
   const bode = useMemo(() => {
@@ -32,13 +35,18 @@ export function Analysis({ a, busy, tOp, setTOp, closedMode }: { a?: AnalysisRes
     if (show.loop) { mag.push(tr('loop L = −P·H·C', a.loop.mag_db, C.loop)); ph.push(tr('loop L', a.loop.phase_deg, C.loop)); }
     if (show.plant) { mag.push(tr('plant P: rate → inflation', a.plant.mag_db, C.plant), tr('plant, fitted model', a.fit.plant_db, C.fit, 'dot')); ph.push(tr('plant P', a.plant.phase_deg, C.plant)); }
     if (show.ctrl) { mag.push(tr('rule × smoothing C·H', a.controller.mag_db, C.ctrl)); ph.push(tr('C·H', a.controller.phase_deg, C.ctrl)); }
-    const marks = [a.margins.pm, a.margins.gm].filter(Boolean).map(m => ({ type: 'line', x0: m!.w, x1: m!.w, yref: 'paper', y0: 0, y1: 1, line: { color: '#aab5b0', dash: 'dot', width: 1 } }));
-    return { mag, ph, marks };
-  }, [a, show, hover]);
+    const marks = [a.margins.pm, a.margins.gm].filter(Boolean).map(m => ({ type: 'line', x0: m!.w, x1: m!.w, yref: 'paper', y0: 0, y1: 1, line: { color: th.muted, dash: 'dot', width: 1 } }));
+    const cy = (v: number) => v >= 1 ? `${v.toFixed(1)} yr` : `${(v * 12).toFixed(1)} mo`;
+    const notes = [
+      ...(a.margins.pm ? [{ x: Math.log10(a.margins.pm.w), y: 1, yref: 'paper', yanchor: 'top', xanchor: 'left', xshift: 4, showarrow: false, text: `PM ${a.margins.pm.pm_deg!.toFixed(0)}° @ ${cy(a.margins.pm.cycle_yr)}`, font: { size: 11, color: th.ink2 } }] : []),
+      ...(a.margins.gm ? [{ x: Math.log10(a.margins.gm.w), y: 0.88, yref: 'paper', yanchor: 'top', xanchor: 'left', xshift: 4, showarrow: false, text: `GM ${a.margins.gm.gm_db!.toFixed(1)} dB @ ${cy(a.margins.gm.cycle_yr)}`, font: { size: 11, color: th.ink2 } }] : []),
+    ];
+    return { mag, ph, marks, notes };
+  }, [a, show, hover, th]);
 
   if (!a) return <div className="panel empty"><p className="muted">{busy ? 'Linearising the model with ngspice (first time ~15 s, later moments ~40 s)…' : 'No analysis yet.'}</p></div>;
   const m = a.margins;
-  const verdict = { stable: ['Stable', 'good'], drift: ['Stable, apart from slow drift', 'good'], unstable: ['Unstable', 'bad'] }[a.verdict];
+  const verdict = { stable: ['✓ Stable', 'good'], drift: ['✓ Stable, apart from slow drift', 'good'], unstable: ['✕ Unstable', 'bad'] }[a.verdict];
   const pm = m.pm, gm = m.gm;
   const ny = { re: a.nyquist.re, im: a.nyquist.im };
   const circle = Array.from({ length: 181 }, (_, i) => i * 2 * Math.PI / 180);
@@ -72,8 +80,8 @@ export function Analysis({ a, busy, tOp, setTOp, closedMode }: { a?: AnalysisRes
       </div>
       <p className="muted note">From ngspice's AC analysis of the full netlist. Hover shows the cycle length. Dotted lines: where the margins are read. Inflation is 120·d ln P/dt, so the plant gain rises with frequency.</p>
       <div className="grid2">
-        <Plot title="Magnitude" height={280} data={bode!.mag} layout={{ xaxis: LOGX, yaxis: { title: { text: 'dB' } }, shapes: [...bode!.marks, { type: 'line', xref: 'paper', x0: 0, x1: 1, y0: 0, y1: 0, line: { color: '#5c6b65', width: 1 } }] }}/>
-        <Plot title="Phase" height={280} data={bode!.ph} layout={{ xaxis: LOGX, yaxis: { title: { text: 'degrees' } }, shapes: [...bode!.marks, { type: 'line', xref: 'paper', x0: 0, x1: 1, y0: -180, y1: -180, line: { color: '#5c6b65', width: 1 } }] }}/>
+        <Plot title="Magnitude" height={280} data={bode!.mag} layout={{ xaxis: LOGX, yaxis: { title: { text: 'dB' } }, shapes: [...bode!.marks, { type: 'line', xref: 'paper', x0: 0, x1: 1, y0: 0, y1: 0, line: { color: th.ink2, width: 1 } }], annotations: bode!.notes }}/>
+        <Plot title="Phase" height={280} data={bode!.ph} layout={{ xaxis: LOGX, yaxis: { title: { text: 'degrees' } }, shapes: [...bode!.marks, { type: 'line', xref: 'paper', x0: 0, x1: 1, y0: -180, y1: -180, line: { color: th.ink2, width: 1 } }] }}/>
       </div>
     </div>
 
@@ -83,15 +91,15 @@ export function Analysis({ a, busy, tOp, setTOp, closedMode }: { a?: AnalysisRes
         data={[
           { type: 'scatter', mode: 'lines', name: 'L(jω), ω > 0', x: ny.re, y: ny.im, customdata: hover, line: { color: C.loop, width: 2 }, hovertemplate: 'cycle %{customdata}<extra></extra>' },
           { type: 'scatter', mode: 'lines', name: 'ω < 0', x: ny.re, y: ny.im.map(v => -v), line: { color: C.loop, width: 1, dash: 'dot' }, hoverinfo: 'skip' },
-          { type: 'scatter', mode: 'lines', name: '1/Ms', x: circle.map(t => -1 + Math.cos(t) / m.ms), y: circle.map(t => Math.sin(t) / m.ms), line: { color: '#aab5b0', width: 1 }, hoverinfo: 'skip', showlegend: false },
-          { type: 'scatter', mode: 'markers', name: '−1', x: [-1], y: [0], marker: { color: '#a8321f', size: 10, symbol: 'x' }, hoverinfo: 'skip' },
+          { type: 'scatter', mode: 'lines', name: '1/Ms', x: circle.map(t => -1 + Math.cos(t) / m.ms), y: circle.map(t => Math.sin(t) / m.ms), line: { color: th.muted, width: 1 }, hoverinfo: 'skip', showlegend: false },
+          { type: 'scatter', mode: 'markers', name: '−1', x: [-1], y: [0], marker: { color: th.critical, size: 11, symbol: 'x' }, hoverinfo: 'skip' },
         ]} layout={{ xaxis: { range: [-4, 2], title: { text: 'Re L' }, zeroline: true }, yaxis: { range: [-3, 3], title: { text: 'Im L' }, scaleanchor: 'x' } }}/></div>
       <div className="panel"><Plot title="Sensitivity" height={320}
         note="|S|: how much a shock at that cycle is damped (< 0 dB) or amplified (> 0 dB). |T|: how inflation follows the target."
         data={[
           { type: 'scatter', mode: 'lines', name: '|S|', x: a.w, y: a.S_db, customdata: hover, line: { color: C.s, width: 2.2 }, hovertemplate: '%{y:.1f} dB<extra>|S| · cycle %{customdata}</extra>' },
           { type: 'scatter', mode: 'lines', name: '|T|', x: a.w, y: a.T_db, customdata: hover, line: { color: C.t, width: 2.2 }, hovertemplate: '%{y:.1f} dB<extra>|T| · cycle %{customdata}</extra>' },
-        ]} layout={{ xaxis: LOGX, yaxis: { title: { text: 'dB' } }, shapes: [{ type: 'line', xref: 'paper', x0: 0, x1: 1, y0: 20 * Math.log10(2), y1: 20 * Math.log10(2), line: { color: '#aab5b0', dash: 'dot', width: 1 } }] }}/></div>
+        ]} layout={{ xaxis: LOGX, yaxis: { title: { text: 'dB' } }, shapes: [{ type: 'line', xref: 'paper', x0: 0, x1: 1, y0: 20 * Math.log10(2), y1: 20 * Math.log10(2), line: { color: th.muted, dash: 'dot', width: 1 } }] }}/></div>
     </div>
 
     <div className="grid2">
@@ -100,14 +108,15 @@ export function Analysis({ a, busy, tOp, setTOp, closedMode }: { a?: AnalysisRes
         data={[
           { type: 'scatter', mode: 'markers', name: 'closed loop', x: cp.map(p => p.re), y: cp.map(p => p.im), customdata: cp.map(p => p.cycle_yr ? `cycle ${cyc(p.cycle_yr)}` : 'no cycle'), marker: { symbol: 'x', size: 10, color: C.loop }, hovertemplate: 'Re %{x:.3f}, Im %{y:.2f} /yr · %{customdata}<extra></extra>' },
           { type: 'scatter', mode: 'markers', name: 'plant', x: op.map(p => p.re), y: op.map(p => p.im), marker: { symbol: 'circle-open', size: 9, color: C.plant }, hovertemplate: 'Re %{x:.3f}, Im %{y:.2f} /yr<extra>plant</extra>' },
-        ]} layout={{ xaxis: { title: { text: 'Re (1/yr)' }, zeroline: true, zerolinecolor: '#5c6b65', range: [-30, 10] }, yaxis: { title: { text: 'Im (rad/yr)' }, range: [-80, 80] },
-          shapes: [{ type: 'rect', x0: 0, x1: 10, yref: 'paper', y0: 0, y1: 1, fillcolor: '#fbeae7', line: { width: 0 }, layer: 'below' }] }}/></div>
+        ]} layout={{ xaxis: { title: { text: 'Re (1/yr)' }, zeroline: true, zerolinecolor: th.ink2, range: [-30, 10] }, yaxis: { title: { text: 'Im (rad/yr)' }, range: [-80, 80] },
+          shapes: [{ type: 'rect', x0: 0, x1: 10, yref: 'paper', y0: 0, y1: 1, fillcolor: th.critical, opacity: 0.08, line: { width: 0 }, layer: 'below' }],
+          annotations: [{ x: 5, y: 1, yref: 'paper', yanchor: 'top', text: 'unstable: grows', showarrow: false, font: { size: 11, color: th.ink2 } }] }}/></div>
       <div className="panel"><Plot title="Linear response to the target +1 point" height={320}
         note={stepUnstable ? 'Unstable: the linear response grows without bound (first 2 years shown; the simulation is held by the limits in the rule).' : 'Small-signal prediction; compare with the Simulation tab for the full nonlinear model.'}
         data={[
           { type: 'scatter', mode: 'lines', name: 'inflation (pt)', x: a.step.years, y: a.step.inflation, line: { color: C.loop, width: 2.2 } },
           { type: 'scatter', mode: 'lines', name: 'policy rate (pt)', x: a.step.years, y: a.step.rate, line: { color: C.plant, width: 2 } },
-          { type: 'scatter', mode: 'lines', name: 'target', x: [0, 12], y: [1, 1], line: { color: C.ctrl, width: 1.4, dash: 'dot' } },
+          { type: 'scatter', mode: 'lines', name: 'target', x: [0, 12], y: [1, 1], line: { color: th.ink2, width: 1.5, dash: 'dot' } },
         ]} layout={{ xaxis: { title: { text: 'years after the step' }, ...(stepUnstable ? { range: [0, 2] } : {}) }, yaxis: { title: { text: 'points' }, ...(stepUnstable ? { range: [-5, 5] } : {}) } }}/></div>
     </div>
 
