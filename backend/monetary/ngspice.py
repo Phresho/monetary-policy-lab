@@ -28,6 +28,7 @@ import math
 import os
 import re
 import threading
+import time
 from pathlib import Path
 import numpy as np
 
@@ -39,7 +40,11 @@ RPAR_DDT = 1e3
 ABSTOL = 1e-9
 CHGTOL = 1e-10
 _lock = threading.Lock()
-_bg_done = threading.Event()
+# ngspice's background thread reports start and end through a callback. Counted, not a single flag, and the end
+# is confirmed with ngSpice_running(): a late end signal of an earlier run cannot end the wait for the next one
+# (the housing app hit a related read-before-finished race on Windows, see the README there).
+_bg = threading.Condition()
+_bg_count = {"start": 0, "end": 0}
 _ng = None
 
 SUFFIX = {"t": 1e12, "g": 1e9, "meg": 1e6, "k": 1e3, "m": 1e-3, "u": 1e-6, "n": 1e-9, "p": 1e-12, "f": 1e-15}
@@ -417,8 +422,9 @@ def _shared():
 
         def _bg_running(exited, ngspice_id, user_data):
             ffi.from_handle(user_data)._is_running = not exited
-            if exited:
-                _bg_done.set()
+            with _bg:
+                _bg_count["end" if exited else "start"] += 1
+                _bg.notify_all()
             return 0
         NgSpiceShared._background_thread_running = staticmethod(_bg_running)
         _ng = NgSpiceShared.new_instance()
@@ -437,22 +443,41 @@ def _timeout() -> float:
 
 
 def _run_text(text: str) -> tuple[dict[str, np.ndarray], list[str]]:
+    """All vectors of the run ({} if it failed: a failed .op leaves a plot with empty vectors) and the log."""
+    vec, log = _run_once(text)
+    if vec and any(np.size(v) == 0 for v in vec.values()):
+        vec = {}
+    return vec, log
+
+
+def _run_once(text: str) -> tuple[dict[str, np.ndarray], list[str]]:
     with _lock:
         ng = _shared()
         api = ng._ngspice_shared
         ng.clear_output()
         ng.load_circuit(text)
         limit = _timeout()
-        _bg_done.clear()
+        deadline = time.monotonic() + limit
+        while api.ngSpice_running() and time.monotonic() < deadline:  # an earlier thread still winding down
+            time.sleep(0.001)
+        with _bg:
+            started = _bg_count["start"]
         api.ngSpice_Command(b"bg_run")
-        timed_out = not _bg_done.wait(limit)
+        with _bg:  # wait until this run's thread has started ...
+            _bg.wait_for(lambda: _bg_count["start"] > started, timeout=max(0.0, deadline - time.monotonic()))
+        while api.ngSpice_running() and time.monotonic() < deadline:  # ... and until it has finished
+            time.sleep(0.001)
+        timed_out = bool(api.ngSpice_running())
         if timed_out:
             api.ngSpice_Command(b"bg_halt")
-            _bg_done.wait(30)
+            end = time.monotonic() + 30
+            while api.ngSpice_running() and time.monotonic() < end:
+                time.sleep(0.01)
         vec = {}
         try:
             plot = ng.plot(simulation=None, plot_name=ng.last_plot)
-            vec = {k.lower(): np.asarray(v._data, dtype=float) for k, v in plot.items()}
+            # complex for AC analyses, float otherwise
+            vec = {k.lower(): (np.asarray(v._data) if np.iscomplexobj(v._data) else np.asarray(v._data, dtype=float)) for k, v in plot.items()}
         except Exception:
             pass
         log = [l for l in ng._stderr if "Note:" not in l][-8:]
@@ -534,12 +559,14 @@ def start_from_op(text: str, op: dict[str, np.ndarray]) -> str:
 
 
 def run_lines(lines: list[str], ic_signals: dict[str, float] | None = None,
-              ic_override: dict[str, float] | None = None) -> dict[str, np.ndarray]:
+              ic_override: dict[str, float] | None = None, states: bool = False) -> dict[str, np.ndarray]:
     """Run the netlist in ngspice; traces under LTspice's names, time from the .tran start.
+    states=True: also traces["states"] = {element: state of its idt() over time} (for linearising at a later time).
 
     Two stages, because ngspice applies an inductor's IC= only with uic (which skips the operating point):
     the operating point with LTspice's start conditions (op_text), then the transient from there (start_from_op)."""
-    text, names, tstart = translate(lines, ic_signals, ic_override)
+    info: dict = {}
+    text, names, tstart = translate(lines, ic_signals, ic_override, info)
     op, log = _run_text(op_text(text))
     if not op:
         raise RuntimeError("ngspice found no operating point: " + " | ".join(log))
@@ -552,4 +579,6 @@ def run_lines(lines: list[str], ic_signals: dict[str, float] | None = None,
     t = vec["time"]
     traces = {"time": t - tstart}
     traces.update(_traces(vec, names, t.size))
+    if states:
+        traces["states"] = {i["owner"]: vec[i["node"]] for i in info["integrators"]}
     return traces

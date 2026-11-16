@@ -34,3 +34,12 @@ output { font-variant-numeric:tabular-nums; color:var(--muted); font-weight:500;
 .chart { margin:0; min-width:0; } .chart figcaption { font-weight:600; margin-bottom:4px; }
 .pick { display:flex; align-items:center; gap:10px; font-weight:600; margin-bottom:8px; } .pick select { padding:5px 8px; border:1px solid var(--line); border-radius:7px; background:var(--panel); max-width:100%; }
 .empty { text-align:center; padding:48px 20px; }
+h3 { font-size:16px; margin:0; }
+.tabs { display:flex; gap:4px; margin-bottom:12px; border-bottom:1px solid var(--line); }
+.tabs button { padding:9px 14px; background:none; border:0; border-bottom:2.5px solid transparent; color:var(--muted); font-weight:550; }
+.tabs button.active { color:var(--ink); border-bottom-color:var(--blue); }
+.busy .chart, .busy .kpi { opacity:.55; transition:opacity .2s; }
+.kpi.verdict.good { border-color:#bfe0b0; background:var(--green-soft); } .kpi.verdict.bad { border-color:#f0c4bb; background:#fbeae7; }
+.kpi.verdict strong { font-size:19px; }
+.pick-row { display:flex; align-items:center; gap:16px; flex-wrap:wrap; margin-bottom:4px; }
+.analysis-head { display:flex; align-items:center; gap:16px; } .slider.tight { flex:1; }

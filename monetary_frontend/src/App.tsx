@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { Analysis, AnalysisResult } from './Analysis';
 import { api } from './api';
 import { Chart, Line, Marker } from './Chart';
 
@@ -35,6 +36,27 @@ export default function App() {
   const [error, setError] = useState('');
   const [extra, setExtra] = useState('I(Exchange_rate)');
   const [showPrev, setShowPrev] = useState(true);
+  const [tab, setTab] = useState<'sim' | 'freq'>('sim');
+  const [an, setAn] = useState<AnalysisResult>();
+  const [anBusy, setAnBusy] = useState(false);
+  const [tOp, setTOp] = useState(0);
+  const anSeq = useRef(0);
+
+  // Frequency tab: re-analyse 300 ms after the last change (the plant is cached, so gain changes are instant;
+  // a new Kp, R* or year needs a new linearisation, 15-40 s). Only the latest request is shown.
+  useEffect(() => {
+    if (tab !== 'freq' || !s) return;
+    const id = ++anSeq.current;
+    const timer = window.setTimeout(async () => {
+      setAnBusy(true);
+      try {
+        const r = await api<AnalysisResult>('/analysis', { scenario: s, t_op_years: tOp });
+        if (id === anSeq.current) { setAn(r); setError(''); }
+      } catch (e) { if (id === anSeq.current) setError(e instanceof Error ? e.message : String(e)); }
+      finally { if (id === anSeq.current) setAnBusy(false); }
+    }, 300);
+    return () => window.clearTimeout(timer);
+  }, [tab, s, tOp]);
 
   useEffect(() => { api<Catalogue>('/catalogue').then(c => { setCat(c); setS(c.defaults); }).catch(e => setError(String(e.message ?? e))); }, []);
   const upy = cat?.time.units_per_year ?? 120;
@@ -80,7 +102,8 @@ export default function App() {
           <button className={!s.closed ? 'active' : ''} onClick={() => set({ closed: false })}>Open loop</button>
           <button className={s.closed ? 'active' : ''} onClick={() => set({ closed: true })}>Closed loop</button>
         </div>
-        {s.closed ? <>
+        {s.closed || tab === 'freq' ? <>
+          {tab === 'freq' && !s.closed && <p className="muted note">Analysis designs the rule; the open-loop setting only sets where the economy is linearised (the base rate below the plots).</p>}
           <h2>Policy rule</h2>
           <p className="muted note">R = R* + Kp·(π − π*) + Ki·∫(π − π*) + Kd·filtered dπ/dt, smoothed by R15·C8 (207 units). Integral and derivative act from the start time.</p>
           <Slider label="Kp (proportional)" value={s.kp} min={0} max={2} step={0.01} onChange={v => set({ kp: v })} hint={`netlist ${nl.kp}`}/>
@@ -99,12 +122,17 @@ export default function App() {
         </>}
         <label className="check"><input type="checkbox" checked={s.steady_start} onChange={e => set({ steady_start: e.target.checked })}/>Start in steady state</label>
         {!s.steady_start && <p className="notice warn">The netlist's own start: P jumps 0.13 → 0.27 and inflation spikes to ~26 000 % in the first months.</p>}
-        <button className="primary" onClick={() => void simulate()} disabled={busy}>{busy ? 'Simulating… (10–15 s)' : 'Run simulation'}</button>
+        {tab === 'sim' ? <button className="primary" onClick={() => void simulate()} disabled={busy}>{busy ? 'Simulating… (10–15 s)' : 'Run simulation'}</button>
+          : <p className="muted note">The analysis updates by itself when you move a slider. Then try the gains in the Simulation tab.</p>}
         <p className="muted note">Time axis: 120 model time units = 1 year (assumed from the /120 in the interest flows).</p>
       </aside>
       <main className="results">
+        <div className="tabs" role="tablist">
+          <button role="tab" aria-selected={tab === 'sim'} className={tab === 'sim' ? 'active' : ''} onClick={() => setTab('sim')}>Simulation</button>
+          <button role="tab" aria-selected={tab === 'freq'} className={tab === 'freq' ? 'active' : ''} onClick={() => setTab('freq')}>Frequency analysis</button>
+        </div>
         {error && <p className="notice bad">{error}</p>}
-        {!run ? <div className="panel empty"><p className="muted">{busy ? 'Running the first simulation…' : 'No run yet.'}</p></div> : <>
+        {tab === 'freq' ? <Analysis a={an} busy={anBusy} tOp={tOp} setTOp={setTOp} closedMode={s.closed}/> : !run ? <div className="panel empty"><p className="muted">{busy ? 'Running the first simulation…' : 'No run yet.'}</p></div> : <>
           <div className="kpis">
             <div className="kpi"><span>Inflation vs target (RMS)</span><strong>{m!.inflation_rmse_pts.toFixed(2)} <em>pt</em></strong><small>largest deviation {m!.inflation_max_dev_pts.toFixed(1)} pt{run.scenario.closed ? ', after the rule is fully on' : ''}</small></div>
             <div className="kpi"><span>Inflation at the end</span><strong>{m!.inflation_end_pct.toFixed(2)} <em>%</em></strong><small>target {run.scenario.target_pct} %</small></div>

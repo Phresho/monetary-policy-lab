@@ -4,7 +4,9 @@ import mimetypes
 import threading
 from pathlib import Path
 
+import numpy as np
 from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel, Field
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -19,6 +21,11 @@ DIST = ROOT / "monetary_frontend" / "dist"
 mimetypes.add_type("text/javascript", ".js")
 mimetypes.add_type("text/css", ".css")
 SLOTS = threading.BoundedSemaphore(2)  # ngspice runs one at a time anyway (shared library lock)
+
+
+class AnalysisRequest(BaseModel):
+    scenario: Scenario
+    t_op_years: float = Field(0.0, ge=0, le=13)
 
 
 def create_app() -> FastAPI:
@@ -38,6 +45,15 @@ def create_app() -> FastAPI:
                 return run(scenario)
             except (RuntimeError, ValueError, OSError) as error:
                 raise HTTPException(422, f"Simulation failed: {error}") from error
+
+    @app.post("/api/analysis")
+    def analysis(request: AnalysisRequest):
+        from . import frequency
+        with SLOTS:
+            try:
+                return frequency.analyze(request.scenario, request.t_op_years)
+            except (RuntimeError, ValueError, OSError, np.linalg.LinAlgError) as error:
+                raise HTTPException(422, f"Analysis failed: {error}") from error
 
     if (DIST / "assets").exists():
         app.mount("/assets", StaticFiles(directory=DIST / "assets"), name="assets")

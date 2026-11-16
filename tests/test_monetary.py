@@ -80,3 +80,62 @@ def test_filtered_derivative_adds_one_state():
     lines = nl.build(nl.Policy(closed=True, derivative="filtered", tau_d=2.0))
     assert nl.PI_D_LINE in lines and ".param tau_Dfilt=2" in lines
     assert ng.parse_params(lines)["tau_d"] == 0.0  # the tax rate is untouched
+
+
+# ---------------------------------------------------------------- frequency analysis
+from monetary import frequency as fr
+from monetary.scenario import Scenario
+
+
+def test_ac_response_matches_a_sine_in_the_simulation():
+    """Rate R = r0 + a sin(w t): inflation amplitude and phase in the second cycle against the AC response at t = 0.
+    Not the first cycle (it still holds the transient of switching the sine on: 5 degrees off), and not later ones
+    (the gain drifts down ~10 % per cycle here because the economy grows: 112, 100, 93, ...)."""
+    s = Scenario()
+    p = fr.plant(s)
+    lines, ic, override, r0 = fr.plant_lines(s, 0)
+    w, a = 0.1, 1e-4
+    T = 2 * np.pi / w
+
+    def run(amp):
+        l = [f".tran 0 {2 * T:.6g} 0 0.02" if x.startswith(".tran") else x for x in lines]
+        l = [x.replace("B§R 0 0 I =V(n_rin)", f"B§R 0 0 I ={r0}+{amp}*sin({w}*time)") for x in l]
+        return ng.run_lines(l, ic, override)
+    base, sine = run(0), run(a)
+    t = np.linspace(T, 2 * T, 800)
+    d = np.interp(t, sine["time"], sine["I(CPI_filtered)"]) - np.interp(t, base["time"], base["I(CPI_filtered)"])
+    c = np.linalg.lstsq(np.column_stack([np.sin(w * t), np.cos(w * t), np.ones_like(t), t]), d, rcond=None)[0]
+    meas = (c[0] + 1j * c[1]) / a
+    ac = np.interp(w, p["w"], p["resp"]["I(CPI_filtered)"].real) + 1j * np.interp(w, p["w"], p["resp"]["I(CPI_filtered)"].imag)
+    assert abs(meas) == pytest.approx(abs(ac), rel=0.15)
+    assert np.degrees(np.angle(meas / ac)) == pytest.approx(0, abs=3)
+
+
+def test_netlist_gains_are_unstable_and_tuned_gains_are_not():
+    """Matches the simulation: the netlist gains oscillate (inflation std 3.7 points), Kp = Ki = 0.02, Kd = 0 holds
+    inflation within 0.01 point of target."""
+    bad = fr.analyze(Scenario(closed=True), 0)
+    assert bad["verdict"] == "unstable" and bad["margins"]["pm"]["pm_deg"] < 0
+    good = fr.analyze(Scenario(closed=True, kp=0.02, ki=0.02, kd=0), 0)
+    assert good["verdict"] in ("stable", "drift") and good["margins"]["pm"]["pm_deg"] > 20
+    for a in (bad, good):
+        assert a["fit"]["rel_rms_pct"] < 1
+
+
+def test_margins_on_a_known_loop():
+    """L = 2/(s (s+1)) : phase margin 38.7 deg at w = 1.25, no phase crossover (gain margin infinite)."""
+    w = np.logspace(-2, 2, 4000)
+    L = 2 / (1j * w * (1j * w + 1))
+    m = fr.margins(w, L)
+    assert m["pm"]["pm_deg"] == pytest.approx(38.67, abs=0.05) and m["pm"]["w"] == pytest.approx(1.249, abs=0.002)
+    assert m["gm"] is None
+
+
+def test_vector_fit_recovers_poles_including_an_unstable_one():
+    w = np.logspace(-3, 1, 300); s = 1j * w
+    f = 1 / (s - 0.01) + (2 + 1j) / (s + 0.5 - 2j) + (2 - 1j) / (s + 0.5 + 2j) + 0.3
+    fit = fr.vector_fit(w, f, 3)
+    assert fit["rel_rms"] < 1e-6
+    got = sorted(fit["poles"], key=lambda p: (p.real, p.imag))
+    want = [-0.5 - 2j, -0.5 + 2j, 0.01]
+    assert np.allclose(got, want, atol=1e-6)  # the unstable pole at +0.01 is kept, not flipped
