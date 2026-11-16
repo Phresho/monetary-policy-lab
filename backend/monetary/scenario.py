@@ -85,6 +85,24 @@ def _steady(key: str) -> steady.Steady:
     return steady.steady_start(lines, nl.IC_SIGNALS)
 
 
+_RECENT: dict[str, dict] = {}   # scenario json -> all traces of the run (last few), for element plots on the map
+
+
+def element_trace(s: Scenario, element: str) -> dict:
+    """I(element) of the scenario's run on the output grid (runs the scenario if it is not among the recent ones)."""
+    key = s.model_copy(update={"name": ""}).model_dump_json()
+    if key not in _RECENT:
+        run(s)
+    traces = _RECENT[key]
+    ref = element.split("§")[-1]
+    hit = next((k for k in traces if k.lower() == f"i({ref.lower()})"), None)
+    if hit is None:
+        raise KeyError(f"no trace for {element}")
+    t = np.linspace(0, T_STOP, POINTS)
+    y = np.interp(t, traces["time"], traces[hit])
+    return {"element": element, "trace": hit, "years": (t / UNITS_PER_YEAR).round(5).tolist(), "values": [round(float(v), 8) for v in y]}
+
+
 def run(s: Scenario) -> dict:
     t0 = time.time()
     lines = build(s)
@@ -93,6 +111,9 @@ def run(s: Scenario) -> dict:
         traces = ng.run_lines(lines, st.ic_signals, st.override)
     else:
         traces = ng.run_lines(lines, nl.IC_SIGNALS)
+    _RECENT[s.model_copy(update={"name": ""}).model_dump_json()] = {k: v for k, v in traces.items() if k == "time" or k.startswith("I(")}
+    while len(_RECENT) > 6:
+        _RECENT.pop(next(iter(_RECENT)))
     t = np.linspace(0, T_STOP, POINTS)
     series = {}
     for key, label, unit, scale in SERIES:

@@ -139,3 +139,35 @@ def test_vector_fit_recovers_poles_including_an_unstable_one():
     got = sorted(fit["poles"], key=lambda p: (p.real, p.imag))
     want = [-0.5 - 2j, -0.5 + 2j, 0.01]
     assert np.allclose(got, want, atol=1e-6)  # the unstable pole at +0.01 is kept, not flipped
+
+
+# ---------------------------------------------------------------- model map (the drawn schematic)
+from collections import defaultdict
+from monetary import schematic
+
+
+def test_drawn_schematic_has_exactly_the_netlist_connectivity():
+    """Every netlist node is exactly one connected net of the drawing and no drawn net joins two nodes. This checks
+    the pin positions, rotations and mirroring (M270), and the one diagonal wire ((416, 6304) -> (400, 1280))."""
+    d = schematic.parse(); net = schematic.nets(d)
+    lines = [l for l in nl.read_model() if l and not l.startswith((".", "*")) and l[0] not in "Kk"]
+    nodes = {l.split()[0]: l.split()[1:3] for l in lines}
+    assert {s["name"] for s in d["symbols"]} == set(nodes)
+    node_to_net, net_to_node = defaultdict(set), defaultdict(set)
+    for s in d["symbols"]:
+        for p, node in zip(s["pins"], nodes[s["name"]]):
+            node_to_net[node].add(net[tuple(p)]); net_to_node[net[tuple(p)]].add(node)
+    assert all(len(v) == 1 for v in node_to_net.values()), {k: v for k, v in node_to_net.items() if len(v) > 1}
+    assert all(len(v) == 1 for v in net_to_node.values())
+
+
+def test_sectors_and_links():
+    m = schematic.model_map()
+    for title in ("Central Bank", "Households", "Wholesale banks", "Retail banks", "Fiscal Authority", "Foreign Sector", "Interest Rates"):
+        assert title in m["sectors"]
+    sector = {e["ref"]: e["sector"] for e in m["elements"]}
+    assert sector["B_PI"] == "Central Bank" and sector["Income"] == "Households" and sector["R_retail"] == "Interest Rates"
+    pairs = {(l["from"], l["to"], l["kind"]) for l in m["links"]}
+    assert ("Retail banks", "Wholesale banks", "flow") in pairs           # the loan chain
+    assert ("Central Bank", "Interest Rates", "signal") in pairs          # R feeds the rates
+    assert not any("0" in l["via"] for l in m["links"])                   # ground is not a flow

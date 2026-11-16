@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Analysis, AnalysisResult } from './Analysis';
+import { ModelMap } from './ModelMap';
 import { api } from './api';
 import { Chart, Line, Marker } from './Chart';
 
@@ -36,7 +37,7 @@ export default function App() {
   const [error, setError] = useState('');
   const [extra, setExtra] = useState('I(Exchange_rate)');
   const [showPrev, setShowPrev] = useState(true);
-  const [tab, setTab] = useState<'sim' | 'freq'>('sim');
+  const [tab, setTab] = useState<'sim' | 'freq' | 'map'>('sim');
   const [an, setAn] = useState<AnalysisResult>();
   const [anBusy, setAnBusy] = useState(false);
   const [tOp, setTOp] = useState(0);
@@ -122,7 +123,7 @@ export default function App() {
         </>}
         <label className="check"><input type="checkbox" checked={s.steady_start} onChange={e => set({ steady_start: e.target.checked })}/>Start in steady state</label>
         {!s.steady_start && <p className="notice warn">The netlist's own start: P jumps 0.13 → 0.27 and inflation spikes to ~26 000 % in the first months.</p>}
-        {tab === 'sim' ? <button className="primary" onClick={() => void simulate()} disabled={busy}>{busy ? 'Simulating… (10–15 s)' : 'Run simulation'}</button>
+        {tab === 'map' ? <p className="muted note">The map shows the traces of the last simulation run.</p> : tab === 'sim' ? <button className="primary" onClick={() => void simulate()} disabled={busy}>{busy ? 'Simulating… (10–15 s)' : 'Run simulation'}</button>
           : <p className="muted note">The analysis updates by itself when you move a slider. Then try the gains in the Simulation tab.</p>}
         <p className="muted note">Time axis: 120 model time units = 1 year (assumed from the /120 in the interest flows).</p>
       </aside>
@@ -130,9 +131,10 @@ export default function App() {
         <div className="tabs" role="tablist">
           <button role="tab" aria-selected={tab === 'sim'} className={tab === 'sim' ? 'active' : ''} onClick={() => setTab('sim')}>Simulation</button>
           <button role="tab" aria-selected={tab === 'freq'} className={tab === 'freq' ? 'active' : ''} onClick={() => setTab('freq')}>Frequency analysis</button>
+          <button role="tab" aria-selected={tab === 'map'} className={tab === 'map' ? 'active' : ''} onClick={() => setTab('map')}>Model map</button>
         </div>
         {error && <p className="notice bad">{error}</p>}
-        {tab === 'freq' ? <Analysis a={an} busy={anBusy} tOp={tOp} setTOp={setTOp} closedMode={s.closed}/> : !run ? <div className="panel empty"><p className="muted">{busy ? 'Running the first simulation…' : 'No run yet.'}</p></div> : <>
+        {tab === 'map' ? <ModelMap scenario={run?.scenario ?? s} closed={s.closed}/> : tab === 'freq' ? <Analysis a={an} busy={anBusy} tOp={tOp} setTOp={setTOp} closedMode={s.closed}/> : !run ? <div className="panel empty"><p className="muted">{busy ? 'Running the first simulation…' : 'No run yet.'}</p></div> : <>
           <div className="kpis">
             <div className="kpi"><span>Inflation vs target (RMS)</span><strong>{m!.inflation_rmse_pts.toFixed(2)} <em>pt</em></strong><small>largest deviation {m!.inflation_max_dev_pts.toFixed(1)} pt{run.scenario.closed ? ', after the rule is fully on' : ''}</small></div>
             <div className="kpi"><span>Inflation at the end</span><strong>{m!.inflation_end_pct.toFixed(2)} <em>%</em></strong><small>target {run.scenario.target_pct} %</small></div>
