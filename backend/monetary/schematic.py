@@ -177,10 +177,88 @@ def model_map() -> dict:
         "bounds": [min(xs) - 200, min(ys) - 200, max(xs) + 200, max(ys) + 200],
         "wires": d["wires"],
         "flags": [{**f, "ground": f["name"] == "0"} for f in d["flags"]],
-        "rects": d["rects"], "sectors": sectors, "links": links(d, exprs),
+        "rects": d["rects"], "sectors": sectors, "links": links(d, exprs), "flows": agent_flows(),
         "texts": [t for t in d["texts"] if not t["directive"]],
         "elements": [{"name": s["name"], "ref": s["ref"], "symbol": s["symbol"], "kind": s["kind"], "rot": s["rot"],
                       "x": s["x"], "y": s["y"], "pins": s["pins"], "sector": s["sector"],
                       "expr": exprs.get(s["name"], s["value"]), "nodes": nodes.get(s["name"], [])}
                      for s in d["symbols"]],
     }
+
+
+# ---------------------------------------------------------------- flows between agents (for the block diagram)
+# Elements drawn outside every box that carry a current between sectors, and the box they belong to.
+OUTSIDE_AGENT = {"B_coup_bank": "Wholesale banks", "B§Forein_Cons": "Foreign Sector", "C_NFA": "Foreign Sector", "R14": "Foreign Sector"}
+CARRIERS = {"inductor", "behavioural current", "current source"}   # elements whose current is a flow
+
+
+def _box_of(d: dict, x: float, y: float) -> str | None:
+    boxes = [r for r in d["rects"] if r["title"] and _inside(r, x, y)]
+    return min(boxes, key=lambda r: (r["x2"] - r["x1"]) * (r["y2"] - r["y1"]))["title"] if boxes else None
+
+
+@lru_cache(maxsize=1)
+def _steady_currents() -> dict[str, float]:
+    """I(element) at the steady state of the default scenario (open loop): the operating point, no time steps."""
+    from . import ngspice as ng, steady
+    from .scenario import Scenario, build
+    lines = build(Scenario())
+    st = steady.steady_start(lines, nl.IC_SIGNALS)
+    text, names, _ = ng.translate(lines, st.ic_signals, st.override)
+    vec, _ = ng._run_text(ng.op_text(text))
+    tr = ng._traces(vec, names, 1)
+    return {k: float(v[0]) for k, v in tr.items() if k.startswith("I(")}
+
+
+def agent_flows() -> list[dict]:
+    """Every flow between two boxes, read from the netlist at the steady state of the default scenario.
+
+    At every node where elements of two or more boxes meet, the hub is the box with the most current-carrying elements
+    on it (a box's own bus: hh_bus is the households', N012 the government's); at a tie, the box with the largest net
+    current into or out of the node (a market: on N001 the firms' Aggregate_Supply delivers, households, government
+    and abroad take). Each element of another box on that node is a flow between that box and the hub, in the direction its
+    steady-state current runs. Current-carrying elements are used; a box that touches the node only through a
+    resistor (R2, R8 on the loan node N019) gets one flow named after the hub's own element (Retail_loan)."""
+    d = parse()
+    agent = {s["name"]: s["sector"] or OUTSIDE_AGENT.get(s["name"]) for s in d["symbols"]}
+    kind = {s["name"]: s["kind"] for s in d["symbols"]}
+    ref = {s["name"]: s["ref"] for s in d["symbols"]}
+    lines = [l for l in nl.read_model() if l and not l.startswith((".", "*")) and l[0] not in "Kk"]
+    nodes = {l.split()[0]: l.split()[1:3] for l in lines}
+    cur = _steady_currents()
+    current = lambda name: cur.get(f"I({name.split('§')[-1]})", 0.0)
+    into: dict = {}   # node -> [(element, current into the node)]
+    for name, (n1, n2) in nodes.items():
+        if agent.get(name):
+            for node, sign in ((n1, -1), (n2, 1)):   # I runs n1 -> n2: it leaves n1 and enters n2
+                if node != "0":
+                    into.setdefault(node, []).append((name, sign * current(name)))
+    out = []
+    for node, members in into.items():
+        net: dict = {}
+        for name, i in members:
+            net[agent[name]] = net.get(agent[name], 0.0) + i
+        if len(net) < 2:
+            continue
+        ncar = {a: sum(1 for n, _ in members if agent[n] == a and kind[n] in CARRIERS) for a in net}
+        hub = max(net, key=lambda a: (ncar[a], abs(net[a])))
+        # names for a resistor-only connection: the hub's flow element, else its source (the bond nodes N007, N013
+        # are driven by the government's bond incentive sources)
+        hub_named = sorted((n for n, _ in members if agent[n] == hub and kind[n] not in ("resistor", "capacitor")),
+                           key=lambda n: (kind[n] not in CARRIERS, -abs(current(n))))
+        for a in net:
+            if a == hub:
+                continue
+            mine = [(n, i) for n, i in members if agent[n] == a]
+            carriers = [(n, i) for n, i in mine if kind[n] in CARRIERS]
+            if not carriers:   # only resistors: one flow, named after the hub's element
+                n, i = max(mine, key=lambda x: abs(x[1]))
+                label = ref[hub_named[0]] if hub_named else ref[n]
+                carriers = [(n, i)]
+            else:
+                label = None
+            for n, i in carriers:
+                src, dst = (a, hub) if i > 0 else (hub, a)
+                out.append({"element": n, "ref": label or ref[n], "kind": kind[n], "from": src, "to": dst, "node": node,
+                            "steady": abs(i)})
+    return out

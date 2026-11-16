@@ -199,3 +199,19 @@ def test_sweep_matches_the_full_analysis():
     bad = Scenario(closed=True)
     mb = fr.sweep(bad, 0, ki_max=bad.ki, kd_max=bad.kd, n=5)
     assert mb["verdict"][-1][-1] == fr.analyze(bad, 0)["verdict"] == "unstable"
+
+
+def test_flows_between_agents_run_the_right_way():
+    """The block map's flows: hubs and directions from the netlist at the steady state."""
+    flows = {(f["ref"], f["from"], f["to"]) for f in schematic.agent_flows()}
+    for expected in [
+        ("Savings", "Households", "Wholesale banks"),                       # deposits
+        ("Whole_sale_loan", "Wholesale banks", "Retail banks"),
+        ("Retail_loan", "Retail banks", "Domestic goods producers"),         # loans to firms
+        ("Tax_Expense", "Households", "Fiscal Authority"),
+        ("Government_Spending", "Fiscal Authority", "Domestic goods producers"),   # market node N002: the firms take
+        ("Domestic_Demand", "NFC", "Households"),                            # goods market N001: the firms deliver
+        ("Imported_supply", "Foreign Sector", "NFC"),
+    ]:
+        assert expected in flows, expected
+    assert all(f["from"] != f["to"] for f in schematic.agent_flows())

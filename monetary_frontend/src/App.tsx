@@ -123,7 +123,7 @@ export default function App() {
         </>}
         <label className="check"><input type="checkbox" checked={s.steady_start} onChange={e => set({ steady_start: e.target.checked })}/>Start in steady state</label>
         {!s.steady_start && <p className="notice warn">The netlist's own start: P jumps 0.13 → 0.27 and inflation spikes to ~26 000 % in the first months.</p>}
-        {tab === 'map' && <p className="muted note">The map shows the active run: sparklines on the blocks, traces of the elements. The first run starts by itself.</p>}
+        {tab === 'map' && <p className="muted note">Click a flow or an element on the map to plot it for the active run (the first run starts by itself).</p>}
         {tab === 'flows' ? <p className="muted note">The flows are those of the active run (Simulation tab).</p> : tab === 'sim' || tab === 'map' ? <button className="primary" onClick={() => void simulate()} disabled={busy}>{busy ? 'Simulating… (10–15 s)' : 'Run simulation'}</button>
           : <p className="muted note">The analysis updates by itself when you move a slider. Then try the gains in the Simulation tab.</p>}
         <p className="muted note">Time axis: 120 model time units = 1 year (assumed from the /120 in the interest flows).</p>

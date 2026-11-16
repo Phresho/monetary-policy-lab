@@ -129,3 +129,12 @@ table.data td.small { font-size:12px; color:var(--ink2); white-space:normal; }
 .elinfo.floating .pin-close { position:sticky; top:0; float:right; border:0; background:none; color:var(--muted); font-size:20px; line-height:1; padding:0 2px; }
 @media (max-width:900px) { .elinfo.floating { position:static; width:auto; max-height:none; box-shadow:none; margin-top:10px; } }
 .schem .scrim { fill:var(--surface); opacity:.72; cursor:zoom-out; }
+/* block map (housing-style): straight flows between agents */
+.schem.blockmap .blk-toggle rect { fill:var(--panel); stroke:var(--ink2); } .schem.blockmap .blk-toggle:hover rect { fill:var(--blue-soft); stroke:var(--blue); }
+.schem .flow-line { fill:none; stroke-width:1.6; vector-effect:non-scaling-stroke; opacity:.85; }
+.schem .flow-hit { fill:none; stroke:transparent; stroke-width:14; vector-effect:non-scaling-stroke; cursor:pointer; pointer-events:stroke; }
+.schem .flow .port { fill:var(--panel); stroke-width:1.4; vector-effect:non-scaling-stroke; }
+.schem .flow-label { font-weight:600; pointer-events:none; paint-order:stroke; stroke:var(--surface); stroke-width:3px; }
+.schem .flow:hover .flow-line, .schem .flow.near .flow-line { stroke-width:2.6; opacity:1; }
+.schem .flow.sel .flow-line { stroke-width:3.4; opacity:1; }
+.schem .flow.sel .flow-label { font-weight:750; }
