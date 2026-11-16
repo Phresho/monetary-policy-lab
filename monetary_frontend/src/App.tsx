@@ -29,7 +29,7 @@ export default function App() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [extra, setExtra] = useState('I(Exchange_rate)');
-  const [tab, setTab] = useState<'sim' | 'freq' | 'flows' | 'map'>('sim');
+  const [tab, setTab] = useState<'sim' | 'freq' | 'flows' | 'map'>('map');  // the circuit map is the start page
   const [an, setAn] = useState<AnalysisResult>();
   const [anBusy, setAnBusy] = useState(false);
   const [tOp, setTOp] = useState(0);
@@ -123,19 +123,20 @@ export default function App() {
         </>}
         <label className="check"><input type="checkbox" checked={s.steady_start} onChange={e => set({ steady_start: e.target.checked })}/>Start in steady state</label>
         {!s.steady_start && <p className="notice warn">The netlist's own start: P jumps 0.13 → 0.27 and inflation spikes to ~26 000 % in the first months.</p>}
-        {tab === 'map' || tab === 'flows' ? <p className="muted note">{tab === 'map' ? 'The map shows the traces of the active run.' : 'The flows are those of the active run (Simulation tab).'}</p> : tab === 'sim' ? <button className="primary" onClick={() => void simulate()} disabled={busy}>{busy ? 'Simulating… (10–15 s)' : 'Run simulation'}</button>
+        {tab === 'map' && <p className="muted note">The map shows the active run: sparklines on the blocks, traces of the elements. The first run starts by itself.</p>}
+        {tab === 'flows' ? <p className="muted note">The flows are those of the active run (Simulation tab).</p> : tab === 'sim' || tab === 'map' ? <button className="primary" onClick={() => void simulate()} disabled={busy}>{busy ? 'Simulating… (10–15 s)' : 'Run simulation'}</button>
           : <p className="muted note">The analysis updates by itself when you move a slider. Then try the gains in the Simulation tab.</p>}
         <p className="muted note">Time axis: 120 model time units = 1 year (assumed from the /120 in the interest flows).</p>
       </aside>
       <main className="results">
         <div className="tabs" role="tablist">
+          <button role="tab" aria-selected={tab === 'map'} className={tab === 'map' ? 'active' : ''} onClick={() => setTab('map')}>Circuit map</button>
           <button role="tab" aria-selected={tab === 'sim'} className={tab === 'sim' ? 'active' : ''} onClick={() => setTab('sim')}>Simulation</button>
           <button role="tab" aria-selected={tab === 'freq'} className={tab === 'freq' ? 'active' : ''} onClick={() => setTab('freq')}>Frequency analysis</button>
           <button role="tab" aria-selected={tab === 'flows'} className={tab === 'flows' ? 'active' : ''} onClick={() => setTab('flows')}>Sector flows</button>
-          <button role="tab" aria-selected={tab === 'map'} className={tab === 'map' ? 'active' : ''} onClick={() => setTab('map')}>Model map</button>
         </div>
         {error && <p className="notice bad">{error}</p>}
-        {tab === 'map' ? <ModelMap scenario={run?.scenario ?? s} closed={s.closed}/>
+        {tab === 'map' ? <ModelMap scenario={run?.scenario ?? s} closed={run?.scenario.closed ?? s.closed} run={run}/>
           : tab === 'flows' ? (run ? <FlowsView scenario={run.scenario}/> : <div className="panel empty"><p className="muted">Run a simulation first.</p></div>)
           : tab === 'freq' ? <Analysis a={an} busy={anBusy} tOp={tOp} setTOp={setTOp} closedMode={s.closed} scenario={s} onPick={(ki, kd) => set({ ki, kd, closed: true })}/>
           : !run ? <div className="panel empty"><p className="muted">{busy ? 'Running the first simulation…' : 'No run yet.'}</p></div> : <>

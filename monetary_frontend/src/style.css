@@ -95,3 +95,37 @@ table.data td.small { font-size:12px; color:var(--ink2); white-space:normal; }
 .name-input { width:100%; min-width:180px; padding:3px 6px; border:1px solid transparent; border-radius:6px; background:none; color:var(--ink); font-size:12.5px; }
 .name-input:hover, .name-input:focus { border-color:var(--line); background:var(--panel); }
 .push { display:inline-flex; align-items:center; gap:4px; margin-right:10px; white-space:nowrap; }
+/* circuit map: layers that unfold in place */
+.schem { height:74vh; min-height:480px; }
+.map-head { justify-content:space-between; }
+.crumbs { display:flex; align-items:center; flex-wrap:wrap; gap:2px; font-size:14px; }
+.crumbs .sep { color:var(--muted); margin:0 2px; } .crumbs .link-btn { font-size:14px; } .crumbs .link-btn.here { color:var(--ink); font-weight:650; }
+.map-tools { display:flex; align-items:center; gap:6px; } .ghost.icon { width:32px; padding:4px 0; font-size:17px; line-height:1; }
+.schem .blk rect { cursor:pointer; } .schem .blk.container rect, .schem .blk.open rect { cursor:grab; }
+.schem .blk:hover rect { filter:brightness(1.03); }
+.schem .blk-title { fill:var(--ink); font-weight:650; pointer-events:none; }
+.schem .blk-sub { fill:var(--ink2); pointer-events:none; }
+.schem .blk-toggle { cursor:pointer; } .schem .blk-toggle circle { fill:var(--panel); stroke:var(--ink2); } .schem .blk-toggle path { stroke:var(--ink); fill:none; }
+.schem .blk-toggle:hover circle { fill:var(--blue-soft); stroke:var(--blue); }
+.schem .eco-frame rect { fill:none; stroke:var(--axis); } .schem .eco-frame text { fill:var(--ink2); }
+.schem .edge { fill:none; stroke:var(--ink2); opacity:.28; pointer-events:stroke; } .schem .edge.on { opacity:.95; } .schem .edge:hover { opacity:1; }
+.legend-line { display:flex; align-items:center; gap:6px; flex-wrap:wrap; margin-top:6px; }
+.lg { display:inline-block; width:26px; height:0; border-top:2px solid var(--ink2); } .lg.signal { border-top-style:dashed; margin-left:10px; }
+.conn { list-style:none; padding:0; margin:4px 0 0; font-size:13px; } .conn li { padding:3px 0; border-bottom:1px solid var(--line); }
+.mt { margin-top:14px; } .link-btn.back { padding-left:0; margin-bottom:4px; }
+/* hand-laid layers: loop signals, sector links, embedded circuits */
+.schem .sig { fill:none; stroke:var(--ink); stroke-width:2.2; } .schem .sig.fb { stroke-dasharray:8 5; }
+.schem .sig-label { fill:var(--ink2); font-size:12px; font-weight:550; pointer-events:none; paint-order:stroke; stroke:var(--surface); stroke-width:4px; }
+.schem .edge { stroke-width:1.4; vector-effect:non-scaling-stroke; } .schem .edge.signal { stroke-dasharray:7 5; } .schem .edge.on { stroke-width:2.4; }
+.schem .blk.focus > rect { stroke-width:2.6; }
+.schem .inner-circuit .wires line { stroke-width:1.2; vector-effect:non-scaling-stroke; }
+.schem .inner-circuit .glyph, .schem .inner-circuit .gnd { stroke-width:1.6; vector-effect:non-scaling-stroke; }
+.schem .inner-circuit .el.sel .glyph { stroke-width:3; }
+.lg.sig { border-top:2.2px solid var(--ink); }
+/* circuit map: full-width canvas with a floating details card */
+.mapwrap { min-width:0; } .map-panel { position:relative; }
+.schem { height:calc(100vh - 230px); min-height:520px; }
+.elinfo.floating { position:absolute; top:112px; right:28px; width:330px; max-height:calc(100% - 140px); overflow:auto; margin:0; box-shadow:0 6px 24px rgba(0,0,0,.14); z-index:2; }
+.elinfo.floating .pin-close { position:sticky; top:0; float:right; border:0; background:none; color:var(--muted); font-size:20px; line-height:1; padding:0 2px; }
+@media (max-width:900px) { .elinfo.floating { position:static; width:auto; max-height:none; box-shadow:none; margin-top:10px; } }
+.schem .scrim { fill:var(--surface); opacity:.72; cursor:zoom-out; }
