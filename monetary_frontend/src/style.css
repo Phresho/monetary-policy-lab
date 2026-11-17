@@ -174,3 +174,15 @@ table.data td.small { font-size:12px; color:var(--ink2); white-space:normal; }
 .schem .blk.offloop { opacity:.5; }
 .schem .flow-line.inner { stroke-width:1.8; }
 .schem .node-dot { stroke:var(--panel); stroke-width:1.5; vector-effect:non-scaling-stroke; }
+/* the plant as drawn: wires coloured by their node's agent, port marks on box edges */
+.schem .plant-drawing .pw line { stroke:var(--ink2); stroke-width:1.1; vector-effect:non-scaling-stroke; }
+.schem .plant-drawing .pw.ground line { stroke:var(--muted); stroke-width:.9; opacity:.75; }
+.schem .plant-drawing .pw.flow line { stroke-width:1.8; }
+.schem .plant-drawing .pw .pw-hit { stroke:transparent !important; stroke-width:10 !important; opacity:1 !important; pointer-events:stroke; cursor:pointer; }
+.schem .plant-drawing .pw:hover line, .schem .plant-drawing .pw.on line { stroke-width:3.2; }
+.schem .plant-drawing .glyph, .schem .plant-drawing .gnd { stroke-width:1.4; vector-effect:non-scaling-stroke; fill:none; }
+.schem .plant-drawing .gnd { stroke:var(--muted); }
+.schem .blk rect.see-through { pointer-events:none; }
+.schem .plant-ports .port-mark { cursor:pointer; } .schem .plant-ports .port-mark circle { fill:var(--panel); stroke-width:1.4; vector-effect:non-scaling-stroke; }
+.schem .plant-ports .port-mark text { text-anchor:middle; dominant-baseline:central; font-weight:700; font-style:italic; font-family:Georgia,serif; pointer-events:none; }
+.schem .plant-ports .port-mark:hover circle, .schem .plant-ports .port-mark.on circle { stroke-width:2.8; }

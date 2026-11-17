@@ -135,6 +135,18 @@ def nets(d: dict) -> dict[tuple[int, int], int]:
     return {p: find(p) for p in points}
 
 
+def wire_nodes(d: dict, nodes: dict[str, list[str]]) -> list[str | None]:
+    """The netlist node of every drawn wire (through the pins on its net); None for a net without pins."""
+    net = nets(d)
+    node_of_net = {}
+    for s in d["symbols"]:
+        for p, node in zip(s["pins"], nodes.get(s["name"], [])):
+            node_of_net[net[tuple(p)]] = node
+    for f in d["flags"]:
+        node_of_net.setdefault(net[(f["x"], f["y"])], f["name"])
+    return [node_of_net.get(net[(w[0], w[1])]) for w in d["wires"]]
+
+
 def links(d: dict, exprs: dict[str, str]) -> list[dict]:
     """Connections between sectors: 'flow' where elements of two sectors share a net (a current flows between them),
     'signal' where an expression in one sector reads I(x) or V(node) of another sector."""
@@ -178,6 +190,7 @@ def model_map() -> dict:
         "wires": d["wires"],
         "flags": [{**f, "ground": f["name"] == "0"} for f in d["flags"]],
         "rects": d["rects"], "sectors": sectors, "links": links(d, exprs), "flows": agent_flows(),
+        "wire_nodes": wire_nodes(d, nodes),
         "texts": [t for t in d["texts"] if not t["directive"]],
         "elements": [{"name": s["name"], "ref": s["ref"], "symbol": s["symbol"], "kind": s["kind"], "rot": s["rot"],
                       "x": s["x"], "y": s["y"], "pins": s["pins"], "sector": s["sector"],
