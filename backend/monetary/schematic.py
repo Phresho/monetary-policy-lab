@@ -262,3 +262,38 @@ def agent_flows() -> list[dict]:
                 out.append({"element": n, "ref": label or ref[n], "kind": kind[n], "from": src, "to": dst, "node": node,
                             "steady": abs(i)})
     return out
+
+
+# ---------------------------------------------------------------- dashboard: imported variables outside the plant
+# Boxes of the drawing that make up the plant (the user's plant figure) and the blocks of the loop around it.
+PLANT_BOXES = {"Households", "Banks", "Wholesale banks", "Retail banks", "Fiscal Authority", "NFC",
+               "Domestic goods producers", "Capital producers", "Foreign Sector"}
+LOOP_BOXES = {"Central Bank": "Controller", "CPI values": "Output", "Shock": "Disturbance"}
+DASH_GROUPS = {   # the signal-only sources outside the plant boxes, by what they describe
+    "Interest rates": ["R_Savings", "R_D", "R_wholesale", "R_retail", "R_ret_target", "y_LT", "R_for", "Coupon_LT", "Leverage"],
+    "Balance sheets and stocks": ["Savings_Account_Balance", "B_loanbal", "B_NW", "Capital_Stock", "Government_Debt", "Issuance",
+                                  "B_LT", "B_ST", "BLh_tgt", "dBLh", "B_L_hh", "B_L_bank", "B_F", "B_F_eur", "RWA", "D_bank", "Bonds_Clearing_Check"],
+    "Returns and prices": ["ROI", "Endo_ROI", "Simple_ROI", "MPK", "Profit", "Wage_index", "Exchange_rate", "lnE"],
+    "Aggregates": ["GDP_real", "GDP_nom", "HH_Capital"],
+    "Policy instruments": ["APP"],
+}
+
+
+def dashboard() -> list[dict]:
+    """Every signal-only source (both nodes ground or unconnected) outside the plant and loop boxes: the variables the
+    plant imports. With its group, expression, and the elements that read it (and where they sit)."""
+    m = model_map()
+    group_of = {r: g for g, refs in DASH_GROUPS.items() for r in refs}
+    exprs = {e["name"]: e["expr"] for e in m["elements"]}
+    readers: dict[str, list[dict]] = {}
+    for e in m["elements"]:
+        for ref in set(re.findall(r"(?<![A-Za-z0-9_])[Ii]\(([^()]+)\)", e["expr"])):
+            readers.setdefault(ref.strip().lower(), []).append({"name": e["name"], "ref": e["ref"], "sector": e["sector"]})
+    out = []
+    for e in m["elements"]:
+        signal_only = set(e["nodes"]) <= {"0"} or all(n.upper().startswith("NC_") for n in e["nodes"])
+        if e["sector"] in PLANT_BOXES or e["sector"] in LOOP_BOXES or not signal_only or e["kind"] not in ("behavioural current", "current source"):
+            continue
+        out.append({"name": e["name"], "ref": e["ref"], "group": group_of.get(e["ref"], "Other"), "expr": exprs[e["name"]],
+                    "box": e["sector"], "readers": [r for r in readers.get(e["ref"].lower(), []) if r["name"] != e["name"]]})
+    return out

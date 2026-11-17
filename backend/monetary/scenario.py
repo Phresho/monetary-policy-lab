@@ -97,11 +97,25 @@ def recent_traces(s: Scenario) -> dict:
     return _RECENT[key]
 
 
-def element_trace(s: Scenario, element: str) -> dict:
-    """I(element) of the scenario's run on the output grid."""
+def dashboard_values(s: Scenario) -> dict:
+    """Start, end, minimum and maximum of every dashboard variable in the scenario's run."""
+    from .schematic import dashboard
     traces = recent_traces(s)
-    ref = element.split("§")[-1]
-    hit = next((k for k in traces if k.lower() == f"i({ref.lower()})"), None)
+    low = {k.lower(): k for k in traces}
+    out = {}
+    for d in dashboard():
+        k = low.get(f"i({d['ref'].lower()})")
+        if k is not None:
+            v = traces[k]
+            out[d["name"]] = {"start": float(v[0]), "end": float(v[-1]), "min": float(v.min()), "max": float(v.max())}
+    return out
+
+
+def element_trace(s: Scenario, element: str) -> dict:
+    """I(element) of the scenario's run on the output grid; "V(node)" gives a node voltage (the effort of a port)."""
+    traces = recent_traces(s)
+    want = element.lower() if element.upper().startswith("V(") else f"i({element.split('§')[-1].lower()})"
+    hit = next((k for k in traces if k.lower() == want), None)
     if hit is None:
         raise KeyError(f"no trace for {element}")
     t = np.linspace(0, T_STOP, POINTS)
@@ -117,7 +131,7 @@ def run(s: Scenario) -> dict:
         traces = ng.run_lines(lines, st.ic_signals, st.override)
     else:
         traces = ng.run_lines(lines, nl.IC_SIGNALS)
-    _RECENT[s.model_copy(update={"name": ""}).model_dump_json()] = {k: v for k, v in traces.items() if k == "time" or k.startswith("I(")}
+    _RECENT[s.model_copy(update={"name": ""}).model_dump_json()] = {k: v for k, v in traces.items() if k == "time" or k.startswith(("I(", "V("))}
     while len(_RECENT) > 6:
         _RECENT.pop(next(iter(_RECENT)))
     t = np.linspace(0, T_STOP, POINTS)

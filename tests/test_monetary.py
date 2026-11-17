@@ -215,3 +215,13 @@ def test_flows_between_agents_run_the_right_way():
     ]:
         assert expected in flows, expected
     assert all(f["from"] != f["to"] for f in schematic.agent_flows())
+
+
+def test_dashboard_holds_the_imported_variables_only():
+    """Signal-only sources outside the plant boxes and the loop blocks (controller, output, disturbance)."""
+    d = schematic.dashboard()
+    refs = {x["ref"] for x in d}
+    assert {"R_retail", "B_NW", "Capital_Stock", "Exchange_rate", "APP", "GDP_real"} <= refs
+    assert not refs & {"B_PI", "R15", "C8", "CPI_filtered", "Target_CPI", "Shock", "Income", "Forein_Cons", "B_coup_bank"}
+    assert all(x["box"] not in schematic.PLANT_BOXES for x in d)
+    assert next(x for x in d if x["ref"] == "R_retail")["readers"]   # read by the banks

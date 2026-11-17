@@ -64,6 +64,20 @@ def create_app() -> FastAPI:
         from . import schematic
         return schematic.model_map()
 
+    @app.get("/api/dashboard")
+    def dashboard_list():
+        from . import schematic
+        return schematic.dashboard()
+
+    @app.post("/api/dashboard/values")
+    def dashboard_vals(scenario: Scenario):
+        from .scenario import dashboard_values
+        with SLOTS:
+            try:
+                return dashboard_values(scenario)
+            except (RuntimeError, ValueError, OSError) as error:
+                raise HTTPException(422, f"Simulation failed: {error}") from error
+
     @app.post("/api/trace")
     def trace(request: TraceRequest):
         from .scenario import element_trace
