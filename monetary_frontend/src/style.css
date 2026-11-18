@@ -186,3 +186,7 @@ table.data td.small { font-size:12px; color:var(--ink2); white-space:normal; }
 .schem .plant-ports .port-mark { cursor:pointer; } .schem .plant-ports .port-mark circle { fill:var(--panel); stroke-width:1.4; vector-effect:non-scaling-stroke; }
 .schem .plant-ports .port-mark text { text-anchor:middle; dominant-baseline:central; font-weight:700; font-style:italic; font-family:Georgia,serif; pointer-events:none; }
 .schem .plant-ports .port-mark:hover circle, .schem .plant-ports .port-mark.on circle { stroke-width:2.8; }
+/* readable plant: titles above the boxes, labels with a halo, time window */
+.schem .plant-title { font-weight:700; paint-order:stroke; stroke:var(--surface); stroke-width:4px; stroke-linejoin:round; }
+.schem .asctext.halo { paint-order:stroke; stroke:var(--surface); stroke-width:3px; stroke-linejoin:round; }
+.win { display:flex; align-items:center; gap:6px; } .win input[type=range] { width:110px; accent-color:var(--blue); } .win output { min-width:86px; font-variant-numeric:tabular-nums; }

@@ -98,17 +98,17 @@ def recent_traces(s: Scenario) -> dict:
 
 
 def dashboard_values(s: Scenario) -> dict:
-    """Start, end, minimum and maximum of every dashboard variable in the scenario's run."""
+    """Every dashboard variable over the scenario's run on a grid of 4 time units (the page applies the time window)."""
     from .schematic import dashboard
     traces = recent_traces(s)
     low = {k.lower(): k for k in traces}
-    out = {}
+    t = np.arange(0, T_STOP + 1e-9, 4.0)
+    series = {}
     for d in dashboard():
         k = low.get(f"i({d['ref'].lower()})")
         if k is not None:
-            v = traces[k]
-            out[d["name"]] = {"start": float(v[0]), "end": float(v[-1]), "min": float(v.min()), "max": float(v.max())}
-    return out
+            series[d["name"]] = [round(float(v), 8) for v in np.interp(t, traces["time"], traces[k])]
+    return {"years": (t / UNITS_PER_YEAR).round(5).tolist(), "series": series}
 
 
 def element_trace(s: Scenario, element: str) -> dict:

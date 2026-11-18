@@ -87,11 +87,31 @@ const P_CLOSED: Box = { x: 1080, y: 256, w: 440, h: 260 };
 const outputBox = (p: Box): Box => ({ x: p.x + p.w + 200, y: CTRL.y + CTRL.h / 2 - 60, w: 240, h: 120 });
 type R4 = { x1: number; y1: number; x2: number; y2: number };
 // The opened plant is the drawing itself at one scale K: every box at its exact place, the wires between them as drawn.
-const DRAW = { x1: 1088, y1: 1120, x2: 8560, y2: 6752 }, MARGIN = 160, K = 0.31;
-const P_OPEN: Box = { x: 1080, y: 120, w: (DRAW.x2 - DRAW.x1 + 2 * MARGIN) * K, h: (DRAW.y2 - DRAW.y1 + 2 * MARGIN) * K + HEAD };
-const VIEW = { x: DRAW.x1 - MARGIN, y: DRAW.y1 - MARGIN, w: DRAW.x2 - DRAW.x1 + 2 * MARGIN, h: DRAW.y2 - DRAW.y1 + 2 * MARGIN };
-const mapRect = (r: R4): Box => ({ x: P_OPEN.x + (r.x1 - VIEW.x) * K, y: P_OPEN.y + HEAD + (r.y1 - VIEW.y) * K, w: (r.x2 - r.x1) * K, h: (r.y2 - r.y1) * K });
-const inView = (x: number, y: number) => x >= VIEW.x && x <= VIEW.x + VIEW.w && y >= VIEW.y && y <= VIEW.y + VIEW.h;
+const K = 0.31, MARGIN = 140;
+type View = { x: number; y: number; w: number; h: number };
+type Geo = { VIEW: View; P_OPEN: Box; mapRect: (r: R4) => Box; inView: (x: number, y: number) => boolean };
+function makeGeo(v: View): Geo {
+  const P_OPEN: Box = { x: 1080, y: 120, w: v.w * K, h: v.h * K + HEAD };
+  return { VIEW: v, P_OPEN,
+    mapRect: r => ({ x: P_OPEN.x + (r.x1 - v.x) * K, y: P_OPEN.y + HEAD + (r.y1 - v.y) * K, w: (r.x2 - r.x1) * K, h: (r.y2 - r.y1) * K }),
+    inView: (x, y) => x >= v.x && x <= v.x + v.w && y >= v.y && y <= v.y + v.h };
+}
+// The part of the drawing that is the plant: its boxes, every element in them, and every wire of their nodes (the
+// drawing's long connecting wires run outside the boxes); ground wires near the boxes. Plus a margin.
+function plantView(m: MapData, rects: Record<string, R4>, inPlantBox: (t: string) => boolean): View {
+  const boxes = Object.entries(rects).filter(([k]) => inPlantBox(k)).map(([, r]) => r);
+  const bx = { x1: Math.min(...boxes.map(r => r.x1)), y1: Math.min(...boxes.map(r => r.y1)), x2: Math.max(...boxes.map(r => r.x2)), y2: Math.max(...boxes.map(r => r.y2)) };
+  const nodes = new Set<string>(m.flows.map(f => f.node));
+  for (const e of m.elements) if (e.sector && inPlantBox(e.sector)) for (const n of e.nodes) if (n !== '0') nodes.add(n);
+  const xs = [bx.x1, bx.x2], ys = [bx.y1, bx.y2], near = (x: number, y: number) => x > bx.x1 - 500 && x < bx.x2 + 500 && y > bx.y1 - 500 && y < bx.y2 + 500;
+  m.wires.forEach((w, i) => {
+    const n = m.wire_nodes[i];
+    if ((n && n !== '0' && nodes.has(n)) || (n === '0' && near(w[0], w[1]) && near(w[2], w[3]))) { xs.push(w[0], w[2]); ys.push(w[1], w[3]); }
+  });
+  const x1 = Math.min(...xs) - MARGIN, y1 = Math.min(...ys) - MARGIN;
+  return { x: x1, y: y1, w: Math.max(...xs) + MARGIN - x1, h: Math.max(...ys) + MARGIN - y1 };
+}
+const GEO0 = makeGeo({ x: 950, y: 980, w: 7750, h: 5910 });
 // where the segment p-q crosses the border of r (Liang-Barsky): the points strictly inside the segment
 function crossings(p: number[], q: number[], r: R4): number[][] {
   const dx = q[0] - p[0], dy = q[1] - p[1], out: number[][] = [];
@@ -128,7 +148,8 @@ const mix = (a: string, b: string, k: number) => { const p = (h: string) => { co
 const within = (outer: string, inner: string) => { let v: string | undefined = inner; while (v) { v = PARENT[v]; if (v === outer) return true; } return false; };
 const inPlant = (id: string) => within(PLANT, id);
 interface DashVar { name: string; ref: string; group: string; expr: string; box: string | null; readers: { name: string; ref: string; sector: string | null }[] }
-type DashVals = Record<string, { start: number; end: number; min: number; max: number }>;
+type DashVals = { years: number[]; series: Record<string, number[]> };
+const T_END = 13.33;
 type Sel = { type: 'block' | 'port' | 'node' | 'el' | 'instr'; id: string; q?: 'e' | 'f' };
 const fmt = (v: number) => !isFinite(v) ? '–' : Math.abs(v) >= 100 ? v.toFixed(1) : Math.abs(v) >= 1 ? v.toFixed(3) : v.toPrecision(3);
 
@@ -139,7 +160,9 @@ export function ModelMap({ scenario, closed, run }: { scenario: unknown; closed:
   const [dash, setDash] = useState<DashVar[]>([]);
   const [vals, setVals] = useState<DashVals>();
   const [error, setError] = useState('');
-  const [open, setOpen] = useState<string[]>([]);
+  const [open, setOpen] = useState<string[]>([]);       // every opened block (several agents can be open)
+  const [focus, setFocus] = useState<string>();          // the block toggled last: the camera and the breadcrumbs follow it
+  const [win, setWin] = useState<[number, number]>([0, 13.33]);   // time window (years) for the plots and the dashboard
   const [whole, setWhole] = useState(false);
   const [sel, setSel] = useState<Sel>();
   const [hover, setHover] = useState<string>();
@@ -171,12 +194,12 @@ export function ModelMap({ scenario, closed, run }: { scenario: unknown; closed:
   }, [rects]);
 
   const plantOpen = open.includes(PLANT);
+  const geo = useMemo(() => m && rects.Households ? makeGeo(plantView(m, rects, inPlant)) : GEO0, [m, rects]);
   const layoutFor = useCallback((o: string[]) => ({ boxes: o.includes(PLANT)
-    ? { [PLANT]: P_OPEN, ...Object.fromEntries(Object.entries(rects).filter(([k]) => inPlant(k)).map(([k, r]) => [k, mapRect(r)])) } as Record<string, Box>
-    : {} as Record<string, Box> }), [rects]);
+    ? { [PLANT]: geo.P_OPEN, ...Object.fromEntries(Object.entries(rects).filter(([k]) => inPlant(k)).map(([k, r]) => [k, geo.mapRect(r)])) } as Record<string, Box>
+    : {} as Record<string, Box> }), [rects, geo]);
   const lay = useMemo(() => layoutFor(open), [layoutFor, open]);
-  const leafOpen = open.find(o => !CHILDREN[o]);                       // the opened block without sub-blocks
-  const loopLeaf = leafOpen && !inPlant(leafOpen) ? leafOpen : undefined;   // controller / output: shown over a scrim
+  const loopLeaf = open.find(o => o === 'Controller' || o === 'Output');   // controller / output: shown over a scrim
   const boxIn = useCallback((id: string, l: ReturnType<typeof layoutFor>, po: boolean): Box => {
     if (id === 'Target setting') return TARGET;
     if (id === 'Controller') return CTRL;
@@ -243,22 +266,33 @@ export function ModelMap({ scenario, closed, run }: { scenario: unknown; closed:
 
   // ---------------------------------------------------------------- open / close (the camera flies to the new layout)
   const pathTo = (id: string): string[] => { const p: string[] = []; let v: string | undefined = id; while (v) { p.unshift(v); v = PARENT[v]; } return p; };
-  const focusBox = (o: string[]): Box => {
-    const last = o[o.length - 1], l = layoutFor(o), po = o.includes(PLANT);
-    if (!last) return loopView(P_CLOSED);
-    if (last === PLANT) return loopView(boxIn(PLANT, l, po));
-    if (!inPlant(last) && !CHILDREN[last]) return expanded(last);
-    return boxIn(last, l, po);
+  const focusBoxOf = (id: string | undefined, o: string[]): Box => {
+    const l = layoutFor(o), po = o.includes(PLANT);
+    if (!id) return loopView(po ? boxIn(PLANT, l, po) : P_CLOSED);
+    if (id === PLANT) return loopView(boxIn(PLANT, l, po));
+    if (!inPlant(id) && !CHILDREN[id]) return expanded(id);
+    return boxIn(id, l, po);
   };
-  function setOpenFly(next: string[]) { setOpen(next); setSel(undefined); flyTo(view(focusBox(next), 0.04)); }
   function toggle(id: string) {
     if (id === 'Target setting' || id === 'Rate path') { setSel({ type: 'block', id }); return; }
-    setOpenFly(open.includes(id) ? open.slice(0, open.indexOf(id)) : pathTo(id));
+    let next: string[], f: string | undefined;
+    if (open.includes(id)) { next = open.filter(o => o !== id && !within(id, o)); f = PARENT[id]; }
+    else {
+      next = [...open, ...pathTo(id).filter(x => !open.includes(x))];
+      if (id === 'Controller' || id === 'Output') next = next.filter(o => o === id || (o !== 'Controller' && o !== 'Output'));
+      f = id;
+    }
+    setOpen(next); setFocus(f); setSel(undefined);
+    flyTo(view(focusBoxOf(f, next), 0.04));
   }
-  function crumb(i: number) { setOpenFly(open.slice(0, i)); }
+  const trail = focus ? pathTo(focus).filter(x => open.includes(x)) : [];
+  function crumb(i: number) {   // the first crumb closes everything; the others fly to that level
+    if (i === 0) { setOpen([]); setFocus(undefined); setSel(undefined); flyTo(view(loopView(P_CLOSED), 0.04)); return; }
+    setFocus(trail[i - 1]); flyTo(view(focusBoxOf(trail[i - 1], open), 0.04));
+  }
   function showWhole(on: boolean) {
     setWhole(on); setSel(undefined); cancelAnimationFrame(anim.current);
-    if (on && m) { const b = m.bounds; setVb([b[0], b[1], b[2] - b[0], b[3] - b[1]]); } else setVb(view(focusBox(open), 0.03));
+    if (on && m) { const b = m.bounds; setVb([b[0], b[1], b[2] - b[0], b[3] - b[1]]); } else setVb(view(focusBoxOf(focus, open), 0.03));
   }
   useEffect(() => { if (m) setVb(view(loopView(P_CLOSED), 0.04)); }, [m]);   // start: the feedback loop
 
@@ -279,15 +313,15 @@ export function ModelMap({ scenario, closed, run }: { scenario: unknown; closed:
       if (common) hub[n] = common;
     }
     const wires = m.wires.map((w, i) => ({ w, i, node: m.wire_nodes[i] })).filter(({ w }) => {
-      if (!inView(w[0], w[1]) && !inView(w[2], w[3])) return false;
+      if (!geo.inView(w[0], w[1]) && !geo.inView(w[2], w[3])) return false;
       const a = coveredBy(w[0], w[1]), b = coveredBy(w[2], w[3]);
       return !(a && a === b);
     });
-    const shown = (x: number, y: number) => inView(x, y) && !coveredBy(x, y);
+    const shown = (x: number, y: number) => geo.inView(x, y) && !coveredBy(x, y);
     const els = m.elements.filter(e => { const cx = (e.pins[0][0] + e.pins[1][0]) / 2, cy = (e.pins[0][1] + e.pins[1][1]) / 2; return shown(cx, cy); });
     const flags = m.flags.filter(f => shown(f.x, f.y));
     const texts = m.texts.filter(x => shown(x.x, x.y) && !rects[x.text.trim()]);
-    const ports: { x: number; y: number; node: string; box: string; ground: boolean }[] = [];
+    const ports: { x: number; y: number; node: string; box: string; ground: boolean; gap: number }[] = [];
     const seen = new Set<string>();
     for (const id of shownPlant) {
       const r = rects[id]; if (!r) continue;
@@ -295,10 +329,12 @@ export function ModelMap({ scenario, closed, run }: { scenario: unknown; closed:
         if (!node) continue;
         for (const [x, y] of crossings([w[0], w[1]], [w[2], w[3]], r)) {
           const k = `${Math.round(x)}|${Math.round(y)}`; if (seen.has(k)) continue; seen.add(k);
-          ports.push({ x, y, node, box: id, ground: node === '0' });
+          if (ports.some(q => q.node === node && Math.hypot(q.x - x, q.y - y) < 160)) continue;   // the same wire at two close edges
+          ports.push({ x, y, node, box: id, ground: node === '0', gap: Infinity });
         }
       }
     }
+    for (const q of ports) for (const o of ports) if (o !== q) q.gap = Math.min(q.gap, Math.hypot(o.x - q.x, o.y - q.y));
     return { wires, els, flags, texts, ports, hub };
   }, [m, plantOpen, shownBlocks, open, rects]);
 
@@ -353,13 +389,28 @@ export function ModelMap({ scenario, closed, run }: { scenario: unknown; closed:
     </>;
   }
 
+  // ---------------------------------------------------------------- titles of the plant boxes (placed without overlap)
+  const tsz = Math.min(Math.max(13 * px, 12), 80), tg = Math.min(Math.max(17 * px, 16), 90);   // keep their screen size
+  const titleAt: Record<string, { x: number; y: number; tx: number; ty: number }> = {};
+  {
+    const placed: number[][] = [];
+    for (const id of shownBlocks.filter(x => inPlant(x))) {   // parents come before their sub-agents
+      const b = boxOf(id), tw = id.length * 0.6 * tsz, w = tw + tg * 1.4, h = Math.max(tsz, tg) * 1.15;
+      const above = [b.x, b.y - h - 3, b.x + w, b.y - 3], inside = [b.x + 6, b.y + 4, b.x + 6 + w, b.y + 4 + h];
+      const free = (r: number[]) => placed.every(o => r[2] < o[0] || r[0] > o[2] || r[3] < o[1] || r[1] > o[3]);
+      const r = free(above) ? above : inside;
+      placed.push(r);
+      titleAt[id] = { x: r[0], y: r[3] - h * 0.22, tx: r[0] + tw + tg * 0.75, ty: r[1] + h / 2 };
+    }
+  }
+
   // ---------------------------------------------------------------- a block (as the housing app draws them: header band, toggle)
   function block(id: string) {
     const isOpen = open.includes(id), leaf = !CHILDREN[id], b = isOpen && id === loopLeaf ? expanded(id) : boxOf(id);
     const fig = loopStyle(id), c = fig ? fig.stroke : colorOf(id);
     const selected = sel?.type === 'block' && sel.id === id, hl = hover === id, big = !!fig;
     const offLoop = (id === 'Controller' && !closed) || (id === 'Rate path' && closed);
-    const plantBox = inPlant(id);
+    const plantBox = inPlant(id), ta = titleAt[id];
     const fill = fig ? (isOpen ? withAlpha(fig.fill, 0.18) : fig.fill) : isOpen ? 'none' : mix(t.panel, c, 0.16);
     const title = TITLE[id];
     const dr = drawingOf(id), r = dr ? rects[dr] : undefined;
@@ -371,7 +422,9 @@ export function ModelMap({ scenario, closed, run }: { scenario: unknown; closed:
     return <g key={id} className={'blk' + (isOpen ? ' open' : '') + (selected ? ' sel' : '') + (hl ? ' focus' : '') + (fig ? ' fig' : '') + (offLoop ? ' offloop' : '')} data-block={id}
       onPointerEnter={() => setHover(id)} onPointerLeave={() => setHover(h => h === id ? undefined : h)}>
       <rect x={b.x} y={b.y} width={b.w} height={b.h} rx={big ? 4 : 6} className={plantBox && isOpen ? 'see-through' : undefined} style={{ fill, stroke: c, strokeWidth: selected ? 2.6 : 1.4, strokeDasharray: offLoop ? '8 6' : plantBox && isOpen ? '10 6' : undefined }}/>
-      {fig && !isOpen ? <>
+      {plantBox ? <>
+        {ta && <text x={ta.x} y={ta.y} fontSize={tsz} className="blk-title plant-title">{id}</text>}
+      </> : fig && !isOpen ? <>
         <text x={b.x + b.w / 2} y={b.y + b.h / 2 - 8} textAnchor="middle" fontSize={27} className="fig-title">{title[0]}</text>
         <text x={b.x + b.w / 2} y={b.y + b.h / 2 + 22} textAnchor="middle" fontSize={id === PLANT ? 17 : 19} style={{ fill: fig.sub }}>{offLoop ? (id === 'Controller' ? '(ECB) · out of the loop' : '(given) · not used') : title[1]}</text>
       </> : <>
@@ -380,7 +433,7 @@ export function ModelMap({ scenario, closed, run }: { scenario: unknown; closed:
         {INFO[id] && !isOpen && b.h > HEAD + 30 && <text x={b.x + 12} y={b.y + HEAD + 24} fontSize={Math.min(Math.max(11 * px, 12), 22)} className="blk-sub">{INFO[id].role}</text>}
       </>}
       {innerSvg}
-      {id !== 'Target setting' && id !== 'Rate path' && <g className="blk-toggle" data-toggle={id} transform={`translate(${b.x + b.w - 20} ${b.y + (fig && !isOpen ? 20 : HEAD / 2)})`}>
+      {id !== 'Target setting' && id !== 'Rate path' && <g className="blk-toggle" data-toggle={id} transform={plantBox && ta ? `translate(${ta.tx} ${ta.ty}) scale(${tg / 20})` : `translate(${b.x + b.w - 20} ${b.y + (fig && !isOpen ? 20 : HEAD / 2)})`}>
         <rect x={-10} y={-10} width={20} height={20} rx={3} strokeWidth={1.3}/><path d={'M-5 0 H5' + (isOpen ? '' : ' M0 -5 V5')} strokeWidth={2}/>
         <title>{isOpen ? `Close ${id}` : `Open ${id}`}</title></g>}
     </g>;
@@ -398,8 +451,12 @@ export function ModelMap({ scenario, closed, run }: { scenario: unknown; closed:
   const selBlock = sel?.type === 'block' ? sel.id : undefined;
   const el = sel?.type === 'el' ? m.elements.find(e => e.name === sel.id) : undefined;
   const dashOf = (name: string) => dash.find(d => d.name === name);
-  const crumbs = ['Feedback loop', ...open];
+  const crumbs = ['Feedback loop', ...trail];
   const groups = [...new Set(dash.map(d => d.group))];
+  // the time window applied to a trace (charts) and to the dashboard series
+  const inWin = (years: number[], values: number[]) => { const x: number[] = [], y: number[] = []; years.forEach((v, i) => { if (v >= win[0] - 1e-9 && v <= win[1] + 1e-9) { x.push(v); y.push(values[i]); } }); return { x, y }; };
+  const wTrace = trace ? inWin(trace.years, trace.values) : undefined;
+  const at = (ys: number[], v: number) => { const yrs = vals!.years; let i = yrs.findIndex(t2 => t2 >= v - 1e-9); if (i < 0) i = yrs.length - 1; return ys[i]; };
 
   return <div className="mapwrap">
     <div className="panel map-panel">
@@ -408,10 +465,16 @@ export function ModelMap({ scenario, closed, run }: { scenario: unknown; closed:
           <button className={'link-btn' + (i === crumbs.length - 1 ? ' here' : '')} onClick={() => crumb(i)}>{p}</button></span>)}</nav>}
         <div className="map-tools">
           <span className={`mode ${closed ? 'closed' : 'open'}`}>{closed ? 'closed loop' : 'open loop'}</span>
+          <div className="win" role="group" aria-label="Time window">
+            <span className="small">Time</span>
+            <input type="range" min={0} max={T_END} step={0.25} value={win[0]} aria-label="From (years)" onChange={e => { const v = Math.min(Number(e.target.value), win[1] - 0.25); setWin([v, win[1]]); }}/>
+            <input type="range" min={0} max={T_END} step={0.25} value={win[1]} aria-label="To (years)" onChange={e => { const v = Math.max(Number(e.target.value), win[0] + 0.25); setWin([win[0], v]); }}/>
+            <output className="small">{win[0].toFixed(1)}–{win[1].toFixed(1)} yr</output>
+          </div>
           <label className="check small"><input type="checkbox" checked={whole} onChange={e => showWhole(e.target.checked)}/>Whole circuit</label>
           <button className="ghost icon" onClick={() => zoomCentre(1 / 1.4)} aria-label="Zoom in" title="Zoom in">+</button>
           <button className="ghost icon" onClick={() => zoomCentre(1.4)} aria-label="Zoom out" title="Zoom out">−</button>
-          <button className="ghost" onClick={() => whole ? showWhole(true) : flyTo(view(focusBox(open), 0.03))} title="Show everything">Fit</button>
+          <button className="ghost" onClick={() => whole ? showWhole(true) : flyTo(view(focusBoxOf(open.includes(PLANT) ? PLANT : undefined, open), 0.03))} title="Show everything">Fit</button>
         </div>
       </div>
       <p className="muted note">Click <b>+</b> to open a block: the plant is your drawing, with each agent's circuit under its box; opening a box lifts it (Banks and NFC first show their sub-agents). The wires between the agents are your own. Click a port mark <b>f</b> on a box edge, a wire, the input u, an element or a dashboard tile to plot it. The loop follows the Open / Closed switch on the left.</p>
@@ -477,8 +540,8 @@ export function ModelMap({ scenario, closed, run }: { scenario: unknown; closed:
           </g>
           {/* the plant block, then its circuit as drawn, then the plant's boxes (closed ones cover their part), then the ports */}
           {shownBlocks.filter(id => !inPlant(id) && id !== loopLeaf).map(block)}
-          {plantDraw && <svg x={P_OPEN.x} y={P_OPEN.y + HEAD} width={VIEW.w * K} height={VIEW.h * K} viewBox={`${VIEW.x} ${VIEW.y} ${VIEW.w} ${VIEW.h}`} className="plant-drawing">
-            {plantDraw.texts.map((x, i) => <text key={i} x={x.x} y={x.y} className="asctext" fontSize={10 + x.size * 9} textAnchor={x.align.endsWith('Right') ? 'end' : 'start'} dominantBaseline="middle"
+          {plantDraw && <svg x={geo.P_OPEN.x} y={geo.P_OPEN.y + HEAD} width={geo.VIEW.w * K} height={geo.VIEW.h * K} viewBox={`${geo.VIEW.x} ${geo.VIEW.y} ${geo.VIEW.w} ${geo.VIEW.h}`} className="plant-drawing">
+            {plantDraw.texts.map((x, i) => <text key={i} x={x.x} y={x.y} className="asctext halo" fontSize={Math.max(10 + x.size * 9, 9 * px / K)} textAnchor={x.align.endsWith('Right') ? 'end' : 'start'} dominantBaseline="middle"
               transform={x.align.startsWith('V') ? `rotate(-90 ${x.x} ${x.y})` : undefined}>{x.text}</text>)}
             {plantDraw.wires.map(({ w, i, node }) => {
               const hubA = node ? plantDraw.hub[node] : undefined, c = hubA ? colorOf(hubA) : undefined, ground = node === '0';
@@ -502,12 +565,12 @@ export function ModelMap({ scenario, closed, run }: { scenario: unknown; closed:
           </svg>}
           {shownBlocks.filter(id => inPlant(id) && open.includes(id)).map(block)}
           {shownBlocks.filter(id => inPlant(id) && !open.includes(id)).map(block)}
-          {plantDraw && <svg x={P_OPEN.x} y={P_OPEN.y + HEAD} width={VIEW.w * K} height={VIEW.h * K} viewBox={`${VIEW.x} ${VIEW.y} ${VIEW.w} ${VIEW.h}`} className="plant-ports">
+          {plantDraw && <svg x={geo.P_OPEN.x} y={geo.P_OPEN.y + HEAD} width={geo.VIEW.w * K} height={geo.VIEW.h * K} viewBox={`${geo.VIEW.x} ${geo.VIEW.y} ${geo.VIEW.w} ${geo.VIEW.h}`} className="plant-ports">
             {plantDraw.ports.map((pt, i) => {
-              const r0 = 7 * px / K, hubA = plantDraw.hub[pt.node], c = hubA ? colorOf(hubA) : t.ink2, onP = sel?.type === 'port' && sel.id === `${pt.box}|${pt.node}`;
+              const r0 = Math.min(7 * px / K, pt.gap / 2.3), hubA = plantDraw.hub[pt.node], c = hubA ? colorOf(hubA) : t.ink2, onP = sel?.type === 'port' && sel.id === `${pt.box}|${pt.node}`;
               return <g key={i} data-port={`${pt.box}|${pt.node}`} className={'port-mark' + (pt.ground ? ' ret' : '') + (onP ? ' on' : '')}>
                 <circle cx={pt.x} cy={pt.y} r={pt.ground ? r0 * 0.55 : r0} style={{ stroke: c }}/>
-                {!pt.ground && <text x={pt.x} y={pt.y} fontSize={r0 * 1.25} style={{ fill: c }}>f</text>}
+                {!pt.ground && r0 * K / px >= 4 && <text x={pt.x} y={pt.y} fontSize={r0 * 1.25} style={{ fill: c }}>f</text>}
                 <title>{pt.ground ? `${pt.box}: return (ground)` : `${pt.box} · node ${pt.node}: click for its flow f and effort e`}</title>
               </g>;
             })}
@@ -520,16 +583,16 @@ export function ModelMap({ scenario, closed, run }: { scenario: unknown; closed:
 
       {/* the dashboard: the current sources outside the plant boxes, which the plant imports */}
       <section className="dash">
-        <h3>Imported variables <span className="muted small">· current sources drawn outside the plant: the plant reads them, they are not part of its circuit yet</span></h3>
+        <h3>Imported variables <span className="muted small">· current sources drawn outside the plant: the plant reads them, they are not part of its circuit yet · values at the end of the time window</span></h3>
         {!vals && <p className="muted note">Values appear once a simulation has run.</p>}
         {groups.map(g => <div key={g} className="dash-group">
           <h4>{g}</h4>
           <div className="dash-grid">{dash.filter(d => d.group === g).map(d => {
-            const v = vals?.[d.name], onT = sel?.type === 'el' && sel.id === d.name;
+            const ser = vals?.series[d.name], v = ser ? { start: at(ser, win[0]), end: at(ser, win[1]) } : undefined, onT = sel?.type === 'el' && sel.id === d.name;
             return <button key={d.name} className={'dash-tile' + (onT ? ' on' : '')} onClick={() => setSel({ type: 'el', id: d.name })} title={d.expr}>
               <span className="dash-name">{pretty(d.ref)}</span>
               <span className="dash-val">{v ? fmt(v.end) : '–'}</span>
-              <span className="dash-sub">{v ? `start ${fmt(v.start)}` : ' '}{d.readers.length ? ` · read by ${d.readers.length}` : ''}</span>
+              <span className="dash-sub">{v ? `at ${win[1].toFixed(1)} yr · ${win[0].toFixed(1)} yr: ${fmt(v.start)}` : ' '}{d.readers.length ? ` · read by ${d.readers.length}` : ''}</span>
             </button>;
           })}</div>
         </div>)}
@@ -548,7 +611,7 @@ export function ModelMap({ scenario, closed, run }: { scenario: unknown; closed:
               ? <>The flow through the port: the current through <code>{portSel.carriers[0].name}</code>{portSel.carriers.length > 1 ? ` (and ${portSel.carriers.length - 1} more on this node)` : ''}.</>
               : <>The effort: the voltage of node <code>{portSel.node}</code> against ground.</>}</p>
             {traceBusy ? <p className="muted note">Simulating the current scenario…</p>
-              : trace ? <Chart title={trace.trace} unit={sel?.q === 'f' ? 'flow per time unit' : 'effort (node voltage)'} height={220} group={null} lines={[{ name: trace.trace, x: trace.years, y: trace.values, color: colorOf(plantDraw?.hub[portSel.node] ?? '') }]}/>
+              : trace ? <Chart title={trace.trace} unit={sel?.q === 'f' ? 'flow per time unit' : 'effort (node voltage)'} height={220} group={null} lines={[{ name: trace.trace, x: wTrace!.x, y: wTrace!.y, color: colorOf(plantDraw?.hub[portSel.node] ?? '') }]}/>
               : <p className="muted note">No trace.</p>}
             <h3 className="mt">On this node</h3>
             <ul className="conn">{portSel.onNode.map(e => <li key={e.name}><button className="link-btn" onClick={() => setSel({ type: 'el', id: e.name })}>{e.ref}</button>
@@ -557,7 +620,7 @@ export function ModelMap({ scenario, closed, run }: { scenario: unknown; closed:
         </> : sel.type === 'instr' ? <>
           <h3>u: the policy rate r</h3>
           <p className="muted small">The plant's input, element <code>B§R</code>: {closed ? 'set by the controller (the rule B_PI through the smoothing R15·C8): closed loop.' : 'the given rate path (base rate, then a step; the sliders on the left): open loop, the controller is out of the loop.'}</p>
-          {traceBusy ? <p className="muted note">Simulating…</p> : trace ? <Chart title={trace.trace} unit="rate" height={220} group={null} lines={[{ name: 'u = r', x: trace.years, y: trace.values, color: FIG.ctrl.stroke }]}/> : null}
+          {traceBusy ? <p className="muted note">Simulating…</p> : trace ? <Chart title={trace.trace} unit="rate" height={220} group={null} lines={[{ name: 'u = r', x: wTrace!.x, y: wTrace!.y, color: FIG.ctrl.stroke }]}/> : null}
         </> : el ? <>
           <h3>{el.ref}</h3>
           <p className="muted small">{el.kind}{el.sector ? ` · ${blockOfDrawing(el.sector)}` : ' · outside the plant boxes (dashboard)'} · netlist name <code>{el.name}</code></p>
@@ -566,7 +629,7 @@ export function ModelMap({ scenario, closed, run }: { scenario: unknown; closed:
           {dashOf(el.name)?.readers.length ? <p className="small">Read by: {dashOf(el.name)!.readers.map(r => `${r.ref}${r.sector ? ` (${blockOfDrawing(r.sector)})` : ''}`).join(', ')}</p> : null}
           {traceBusy ? <p className="muted note">Simulating the current scenario for this trace…</p>
             : trace ? <Chart title={trace.trace} unit={el.kind === 'inductor' || el.kind.includes('current') ? 'current (flow)' : 'value'} height={220} group={null}
-                lines={[{ name: trace.trace, x: trace.years, y: trace.values, color: KIND[el.kind] ?? t.inflation }]}/>
+                lines={[{ name: trace.trace, x: wTrace!.x, y: wTrace!.y, color: KIND[el.kind] ?? t.inflation }]}/>
             : <p className="muted note">No trace for this element.</p>}
         </> : selBlock ? <>
           <h3>{TITLE[selBlock] ? `${TITLE[selBlock][0]} ${TITLE[selBlock][1]}` : selBlock}</h3>
