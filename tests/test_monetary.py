@@ -84,7 +84,7 @@ def test_filtered_derivative_adds_one_state():
 
 # ---------------------------------------------------------------- frequency analysis
 from monetary import frequency as fr
-from monetary.scenario import Scenario
+from monetary.scenario import DEFAULTS, Scenario
 
 
 def test_ac_response_matches_a_sine_in_the_simulation():
@@ -114,7 +114,7 @@ def test_ac_response_matches_a_sine_in_the_simulation():
 def test_netlist_gains_are_unstable_and_tuned_gains_are_not():
     """Matches the simulation: the netlist gains oscillate (inflation std 3.7 points), Kp = Ki = 0.02, Kd = 0 holds
     inflation within 0.01 point of target."""
-    bad = fr.analyze(Scenario(closed=True), 0)
+    bad = fr.analyze(Scenario(closed=True, ki=DEFAULTS["ki"]), 0)
     assert bad["verdict"] == "unstable" and bad["margins"]["pm"]["pm_deg"] < 0
     good = fr.analyze(Scenario(closed=True, kp=0.02, ki=0.02, kd=0), 0)
     assert good["verdict"] in ("stable", "drift") and good["margins"]["pm"]["pm_deg"] > 20
@@ -196,7 +196,7 @@ def test_sweep_matches_the_full_analysis():
     assert m["ki"][2] == pytest.approx(0.02) and m["kd"][0] == 0
     assert m["verdict"][0][2] == fr.analyze(s, 0)["verdict"]
     assert m["ms"][0][2] == pytest.approx(fr.analyze(s, 0)["margins"]["ms"], rel=1e-3)
-    bad = Scenario(closed=True)
+    bad = Scenario(closed=True, ki=DEFAULTS["ki"])
     mb = fr.sweep(bad, 0, ki_max=bad.ki, kd_max=bad.kd, n=5)
     assert mb["verdict"][-1][-1] == fr.analyze(bad, 0)["verdict"] == "unstable"
 
@@ -225,3 +225,18 @@ def test_dashboard_holds_the_imported_variables_only():
     assert not refs & {"B_PI", "R15", "C8", "CPI_filtered", "Target_CPI", "Shock", "Income", "Forein_Cons", "B_coup_bank"}
     assert all(x["box"] not in schematic.PLANT_BOXES for x in d)
     assert next(x for x in d if x["ref"] == "R_retail")["readers"]   # read by the banks
+
+
+def test_app_starts_with_a_stable_rule():
+    """Ki 0.04 instead of the netlist's 0.44 (Kp 0.06, Kd 1.5 kept): the closed loop is stable with margin."""
+    a = fr.analyze(Scenario(closed=True), 0)
+    assert DEFAULTS["ki"] == pytest.approx(0.44) and Scenario().ki == pytest.approx(0.04)
+    assert a["verdict"] in ("stable", "drift") and a["margins"]["pm"]["pm_deg"] > 40 and a["margins"]["ms"] < 2
+
+
+def test_steady_closed_asc_with_a_new_ki(tmp_path):
+    """The gain directive is replaced in place (one Ki in the drawing), the new parts sit next to B_PI."""
+    out, _ = asc.write(closed=True, ki=0.04, out=tmp_path / "c.asc")
+    text = out.read_text(encoding="utf-8")
+    assert text.count("Ki=0.04") == 1 and "Ki=0.44" not in text
+    assert text.count("tau_Dfilt=") == 1 and "/tau_Dfilt" in text and "SYMATTR InstName PI_D" in text

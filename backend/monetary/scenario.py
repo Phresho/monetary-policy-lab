@@ -16,6 +16,10 @@ POINTS = 1601            # output grid: one point per time unit
 
 _P = ng.parse_params(nl.read_model())
 DEFAULTS = {"kp": _P["kp"], "ki": _P["ki"], "kd": _P["kd"], "r_star": _P["r_star"], "t_start": _P["t_start"]}
+# The app starts from Ki = 0.04 instead of the netlist's 0.44: with 0.44 the closed loop oscillates (unstable, inflation
+# std 3.6 points; also without the derivative term, then 6.2); with 0.04 and the netlist's Kp 0.06 and Kd 1.5 it is
+# stable with a phase margin of about 50 degrees (tests/test_monetary.py). The netlist values stay the slider hints.
+START_KI = 0.04
 PHI_TARGET = _P.get("phi_target")   # target bank leverage, a reference line in the balance-sheet panel
 
 
@@ -26,7 +30,7 @@ class Scenario(BaseModel):
     steady_start: bool = True               # False: the netlist's own start (.ic lines and start-up guards)
     # Policy rule B_PI (closed loop)
     kp: float = Field(DEFAULTS["kp"], ge=0, le=5)
-    ki: float = Field(DEFAULTS["ki"], ge=0, le=5)
+    ki: float = Field(START_KI, ge=0, le=5)
     kd: float = Field(DEFAULTS["kd"], ge=0, le=20)
     derivative: Literal["filtered", "netlist"] = "filtered"
     tau_d: float = Field(1.0, ge=0.1, le=50)          # derivative filter, time units
