@@ -157,6 +157,9 @@ const fmt = (v: number) => !isFinite(v) ? '–' : Math.abs(v) >= 100 ? v.toFixed
 type WireFlow = { years: number[]; segments: { w: number; p: number[]; node: string; i: number[] }[] };
 const PLAY_SECONDS = 20;   // playing the whole run (13.3 years) takes this long
 const DOT_PERIODS = [100, 200, 400, 800, 1600];   // dot spacing in drawing units; one is picked for about 30 screen pixels
+// How far the dots move: drawing units per (typical current x year). With the run played in PLAY_SECONDS a typical
+// current moves its dots about one spacing per second.
+const DOT_TRAVEL = 400;
 
 export function ModelMap({ scenario, closed, run, busy = false, expectSec = 12 }: { scenario: unknown; closed: boolean; run?: SavedRun; busy?: boolean; expectSec?: number }) {
   const t = useTheme();
@@ -240,7 +243,25 @@ export function ModelMap({ scenario, closed, run, busy = false, expectSec = 12 }
     const all = wf.segments.flatMap(sg => sg.i.map(Math.abs)).filter(v => v > 0).sort((a, b) => a - b);
     return all[Math.floor(all.length * 0.95)] || 1;
   }, [wf]);
-  const ti = wf ? Math.min(wf.years.length - 1, Math.round(tNow / (wf.years[1] - wf.years[0]))) : 0;   // dots change per sample
+  // Where the dots are (as in Falstad's circuit simulator): a dot moves as far as the charge that has passed, so its
+  // position is the integral of the current from t = 0 to the moment shown. Sliding the time back moves the dots back.
+  // sign(i)*sqrt(|i|) is integrated instead of i, so small flows still move visibly next to large ones; it stays a
+  // fixed function of time, so back and forth agree.
+  const charge = useMemo(() => {
+    if (!wf) return [] as Float64Array[];
+    const dt = wf.years[1] - wf.years[0];
+    return wf.segments.map(sg => {
+      const g = sg.i.map(v => Math.sign(v) * Math.sqrt(Math.abs(v) / iRef)), q = new Float64Array(g.length);
+      for (let j = 1; j < g.length; j++) q[j] = q[j - 1] + (g[j - 1] + g[j]) / 2 * dt;
+      return q;
+    });
+  }, [wf, iRef]);
+  const ti = wf ? Math.min(wf.years.length - 1, Math.round(tNow / (wf.years[1] - wf.years[0]))) : 0;   // sample nearest the moment
+  const chargeAt = (k: number) => {   // linear between samples, so the dots glide while playing
+    const q = charge[k]; if (!q || !wf) return 0;
+    const x = tNow / (wf.years[1] - wf.years[0]), j = Math.min(Math.floor(x), q.length - 2), f = Math.min(Math.max(x - j, 0), 1);
+    return q[j] + (q[j + 1] - q[j]) * f;
+  };
   const geo = useMemo(() => m && rects.Households ? makeGeo(plantView(m, rects, inPlant)) : GEO0, [m, rects]);
   const layoutFor = useCallback((o: string[]) => ({ boxes: o.includes(PLANT)
     ? { [PLANT]: geo.P_OPEN, ...Object.fromEntries(Object.entries(rects).filter(([k]) => inPlant(k)).map(([k, r]) => [k, geo.mapRect(r)])) } as Record<string, Box>
@@ -618,18 +639,18 @@ export function ModelMap({ scenario, closed, run, busy = false, expectSec = 12 }
               </g>;
             })}
             {wf && (() => {
-              // moving dots: direction = sign of the current at the shown moment, speed grows with its size
+              // dots placed by the charge that has passed (see chargeAt): they move with the time bar, back and forth
               const shownW = new Set(plantDraw.wires.map(x => x.i)), unit = px / K;   // drawing units per screen pixel
               const period = DOT_PERIODS.find(q => q / unit >= 26) ?? DOT_PERIODS[DOT_PERIODS.length - 1];
               const dot = 7 * unit;   // about 7 screen pixels at every zoom
               return <g className="flow-dots-layer" aria-hidden="true">{wf.segments.map((sg, k) => {
                 if (!shownW.has(sg.w)) return null;
-                const v = sg.i[ti] ?? 0, a = Math.abs(v) / iRef;
-                if (a < 2e-3) return null;
+                const v = sg.i[ti] ?? 0;
+                if (Math.abs(v) / iRef < 2e-3 && Math.abs(chargeAt(k)) < 1e-3) return null;   // no current, none passed yet
                 const hubA = plantDraw.hub[sg.node], c = hubA ? colorOf(hubA) : t.ink2;
-                const dur = 2.6 / (0.25 + 1.75 * Math.sqrt(Math.min(a, 4)));
-                return <line key={k} x1={sg.p[0]} y1={sg.p[1]} x2={sg.p[2]} y2={sg.p[3]} className={`flow-dots p${period}`}
-                  style={{ stroke: c, strokeWidth: dot, strokeDasharray: `0 ${period}`, animationDuration: `${dur.toFixed(2)}s`, animationDirection: v > 0 ? 'normal' : 'reverse' }}/>;
+                const offset = -((chargeAt(k) * DOT_TRAVEL) % period);   // a smaller dash offset moves the dots toward p[2:4]
+                return <line key={k} x1={sg.p[0]} y1={sg.p[1]} x2={sg.p[2]} y2={sg.p[3]} className="flow-dots"
+                  style={{ stroke: c, strokeWidth: dot, strokeDasharray: `0 ${period}`, strokeDashoffset: offset }}/>;
               })}</g>;
             })()}
             {plantDraw.flags.map((f, i) => f.ground ? <path key={i} className="gnd" d={`M${f.x} ${f.y} v14 m-22 0 h44 m-32 10 h20 m-10 10 h0`}/>
