@@ -389,19 +389,18 @@ export function ModelMap({ scenario, closed, run }: { scenario: unknown; closed:
     </>;
   }
 
-  // ---------------------------------------------------------------- titles of the plant boxes (placed without overlap)
-  const tsz = Math.min(Math.max(13 * px, 12), 80), tg = Math.min(Math.max(17 * px, 16), 90);   // keep their screen size
-  const titleAt: Record<string, { x: number; y: number; tx: number; ty: number }> = {};
-  {
-    const placed: number[][] = [];
-    for (const id of shownBlocks.filter(x => inPlant(x))) {   // parents come before their sub-agents
-      const b = boxOf(id), tw = id.length * 0.6 * tsz, w = tw + tg * 1.4, h = Math.max(tsz, tg) * 1.15;
-      const above = [b.x, b.y - h - 3, b.x + w, b.y - 3], inside = [b.x + 6, b.y + 4, b.x + 6 + w, b.y + 4 + h];
-      const free = (r: number[]) => placed.every(o => r[2] < o[0] || r[0] > o[2] || r[3] < o[1] || r[1] > o[3]);
-      const r = free(above) ? above : inside;
-      placed.push(r);
-      titleAt[id] = { x: r[0], y: r[3] - h * 0.22, tx: r[0] + tw + tg * 0.75, ty: r[1] + h / 2 };
-    }
+  // ---------------------------------------------------------------- header bars of the plant boxes
+  // As in the housing app, every agent carries a bar with its title and its +/-. The bar sits on top of the box (in
+  // the room the cleaned-up drawing leaves between the boxes), so it never covers the circuit; it is as high as a block
+  // header (HEAD) where there is room, lower where a sub-agent sits close under its parent's top or under another box.
+  const barAt: Record<string, { h: number; w: number; fs: number }> = {};
+  for (const id of shownBlocks.filter(x => inPlant(x))) {
+    const r = rects[id]; if (!r) continue;
+    const par = PARENT[id], pr = par && par !== PLANT ? rects[par] : undefined;
+    const above = Object.entries(rects).filter(([k, q]) => k !== id && q.y2 <= r.y1 && !(q.x2 < r.x1 || q.x1 > r.x2)).map(([, q]) => r.y1 - q.y2);
+    const h = Math.max(12, Math.min(HEAD, Math.min(pr ? r.y1 - pr.y1 : Infinity, ...above) * K - 3));
+    const fs = Math.min(h * 0.62, Math.max(13 * px, 12));
+    barAt[id] = { h, fs, w: Math.max(boxOf(id).w, id.length * 0.6 * fs + h * 1.5) };
   }
 
   // ---------------------------------------------------------------- a block (as the housing app draws them: header band, toggle)
@@ -410,7 +409,7 @@ export function ModelMap({ scenario, closed, run }: { scenario: unknown; closed:
     const fig = loopStyle(id), c = fig ? fig.stroke : colorOf(id);
     const selected = sel?.type === 'block' && sel.id === id, hl = hover === id, big = !!fig;
     const offLoop = (id === 'Controller' && !closed) || (id === 'Rate path' && closed);
-    const plantBox = inPlant(id), ta = titleAt[id];
+    const plantBox = inPlant(id), bar = barAt[id];
     const fill = fig ? (isOpen ? withAlpha(fig.fill, 0.18) : fig.fill) : isOpen ? 'none' : mix(t.panel, c, 0.16);
     const title = TITLE[id];
     const dr = drawingOf(id), r = dr ? rects[dr] : undefined;
@@ -422,8 +421,10 @@ export function ModelMap({ scenario, closed, run }: { scenario: unknown; closed:
     return <g key={id} className={'blk' + (isOpen ? ' open' : '') + (selected ? ' sel' : '') + (hl ? ' focus' : '') + (fig ? ' fig' : '') + (offLoop ? ' offloop' : '')} data-block={id}
       onPointerEnter={() => setHover(id)} onPointerLeave={() => setHover(h => h === id ? undefined : h)}>
       <rect x={b.x} y={b.y} width={b.w} height={b.h} rx={big ? 4 : 6} className={plantBox && isOpen ? 'see-through' : undefined} style={{ fill, stroke: c, strokeWidth: selected ? 2.6 : 1.4, strokeDasharray: offLoop ? '8 6' : plantBox && isOpen ? '10 6' : undefined }}/>
-      {plantBox ? <>
-        {ta && <text x={ta.x} y={ta.y} fontSize={tsz} className="blk-title plant-title">{id}</text>}
+      {plantBox ? bar && <>
+        <path d={`M${b.x} ${b.y} V${b.y - bar.h + 5} Q${b.x} ${b.y - bar.h} ${b.x + 5} ${b.y - bar.h} H${b.x + bar.w - 5} Q${b.x + bar.w} ${b.y - bar.h} ${b.x + bar.w} ${b.y - bar.h + 5} V${b.y} Z`}
+          className="plant-bar" style={{ fill: mix(t.panel, c, 0.32), stroke: c, strokeWidth: selected ? 2.2 : 1.2 }}/>
+        <text x={b.x + bar.h * 0.3} y={b.y - bar.h / 2} dominantBaseline="central" fontSize={bar.fs} className="blk-title">{id}</text>
       </> : fig && !isOpen ? <>
         <text x={b.x + b.w / 2} y={b.y + b.h / 2 - 8} textAnchor="middle" fontSize={27} className="fig-title">{title[0]}</text>
         <text x={b.x + b.w / 2} y={b.y + b.h / 2 + 22} textAnchor="middle" fontSize={id === PLANT ? 17 : 19} style={{ fill: fig.sub }}>{offLoop ? (id === 'Controller' ? '(ECB) · out of the loop' : '(given) · not used') : title[1]}</text>
@@ -433,7 +434,7 @@ export function ModelMap({ scenario, closed, run }: { scenario: unknown; closed:
         {INFO[id] && !isOpen && b.h > HEAD + 30 && <text x={b.x + 12} y={b.y + HEAD + 24} fontSize={Math.min(Math.max(11 * px, 12), 22)} className="blk-sub">{INFO[id].role}</text>}
       </>}
       {innerSvg}
-      {id !== 'Target setting' && id !== 'Rate path' && <g className="blk-toggle" data-toggle={id} transform={plantBox && ta ? `translate(${ta.tx} ${ta.ty}) scale(${tg / 20})` : `translate(${b.x + b.w - 20} ${b.y + (fig && !isOpen ? 20 : HEAD / 2)})`}>
+      {id !== 'Target setting' && id !== 'Rate path' && <g className="blk-toggle" data-toggle={id} transform={plantBox && bar ? `translate(${b.x + bar.w - bar.h / 2} ${b.y - bar.h / 2}) scale(${bar.h * 0.6 / 20})` : `translate(${b.x + b.w - 20} ${b.y + (fig && !isOpen ? 20 : HEAD / 2)})`}>
         <rect x={-10} y={-10} width={20} height={20} rx={3} strokeWidth={1.3}/><path d={'M-5 0 H5' + (isOpen ? '' : ' M0 -5 V5')} strokeWidth={2}/>
         <title>{isOpen ? `Close ${id}` : `Open ${id}`}</title></g>}
     </g>;

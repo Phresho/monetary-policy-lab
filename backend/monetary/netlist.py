@@ -1,4 +1,4 @@
-"""Builds run netlists from the unchanged LTspice model (model/Model_Bank_20261111_bank.net).
+"""Builds run netlists from the unchanged LTspice model (model/Model_Bank_20261111_bank_cleaned up.net).
 
 The model file is never edited. Each option replaces exact, asserted lines, so a change in the source netlist
 fails loudly instead of silently altering the run (same approach as backend/housing/netlist.py).
@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 import re
 
-MODEL = Path(__file__).resolve().parents[2] / "model" / "Model_Bank_20261111_bank.net"
+MODEL = Path(__file__).resolve().parents[2] / "model" / "Model_Bank_20261111_bank_cleaned up.net"   # the cleaned-up drawing (more room for the web map)
 # Start values of idt() that read a signal: CPI_filtered starts at I(CPI), which is pi_bar while time < 0.1.
 IC_SIGNALS = {"I(CPI)": 0.02}
 
