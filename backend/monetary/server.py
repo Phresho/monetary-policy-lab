@@ -3,6 +3,7 @@ from __future__ import annotations
 import mimetypes
 import threading
 from pathlib import Path
+from typing import Literal
 
 import numpy as np
 from fastapi import FastAPI, HTTPException
@@ -34,6 +35,25 @@ class SweepRequest(BaseModel):
     ki_max: float = Field(2.0, gt=0, le=5)
     kd_max: float = Field(10.0, gt=0, le=20)
     n: int = Field(21, ge=5, le=41)
+
+
+class TransferRequest(BaseModel):
+    scenario: Scenario
+    input: str = Field(max_length=80)
+    output: str = Field(max_length=80)
+    closed: bool = False
+    t_op_years: float = Field(0.0, ge=0, le=13)
+
+
+class RobustRequest(BaseModel):
+    scenario: Scenario
+    t_op_years: float = Field(0.0, ge=0, le=13)
+    M: float = Field(2.0, ge=1.05, le=10)          # peak of |S| allowed
+    wB: float = Field(2.0, gt=0, le=200)           # performance bandwidth, rad/yr
+    delta: float = Field(0.1, ge=0, le=2)          # extra model error on top of the plant family
+    ks_max: float = Field(2.0, gt=0, le=100)       # largest |K S|
+    method: Literal["hinf", "mu"] = "hinf"
+    free: Literal["ki_kd", "all"] = "ki_kd"
 
 
 class TraceRequest(BaseModel):
@@ -116,6 +136,42 @@ def create_app() -> FastAPI:
                 return wf.wire_currents(scenario)
             except (RuntimeError, ValueError, OSError) as error:
                 raise HTTPException(422, f"Simulation failed: {error}") from error
+
+    @app.post("/api/transfer")
+    def transfer(request: TransferRequest):
+        """Transfer function between two elements (an extra flow into the first, the current of the second)."""
+        from . import transfer as tf
+        with SLOTS:
+            try:
+                return tf.transfer(request.scenario, request.input, request.output, request.closed, request.t_op_years)
+            except KeyError as error:
+                raise HTTPException(404, str(error).strip("'")) from error
+            except (RuntimeError, ValueError, OSError, np.linalg.LinAlgError) as error:
+                raise HTTPException(422, f"Transfer function failed: {error}") from error
+
+    def _weights(r: "RobustRequest"):
+        from . import robust as rb
+        return rb.Weights(r.M, r.wB, r.delta, r.ks_max)
+
+    @app.post("/api/robust")
+    def robust(request: RobustRequest):
+        """H-infinity and mu measures of the current rule against the plant family."""
+        from . import robust as rb
+        with SLOTS:
+            try:
+                return rb.evaluate(request.scenario, request.t_op_years, _weights(request))
+            except (RuntimeError, ValueError, OSError, np.linalg.LinAlgError) as error:
+                raise HTTPException(422, f"Robustness analysis failed: {error}") from error
+
+    @app.post("/api/robust/tune")
+    def robust_tune(request: RobustRequest):
+        """PID gains from a fixed-structure H-infinity or mu design."""
+        from . import robust as rb
+        with SLOTS:
+            try:
+                return rb.tune(request.scenario, request.t_op_years, _weights(request), request.method, request.free)
+            except (RuntimeError, ValueError, OSError, np.linalg.LinAlgError) as error:
+                raise HTTPException(422, f"Tuning failed: {error}") from error
 
     @app.post("/api/sweep")
     def sweep(request: SweepRequest):

@@ -206,3 +206,19 @@ table.data td.small { font-size:12px; color:var(--ink2); white-space:normal; }
 .dash-open-head { display:flex; justify-content:space-between; align-items:flex-start; width:100%; }
 .dash-open-title { display:flex; flex-direction:column; gap:1px; } .dash-tile.open .chart { width:100%; }
 .dash-tile.open .pin-close { border:0; background:none; color:var(--muted); font-size:20px; line-height:1; padding:0 2px; }
+
+/* transfer function: picked flows (ctrl-click), the panel below the map */
+.schem .el.tf-in .mark, .schem .el.tf-out .mark { stroke-width:22; }
+.schem .el.tf-in .mark { stroke:var(--blue); } .schem .el.tf-out .mark { stroke:var(--orange, #eb6834); }
+.schem .el.tf-in .hit, .schem .el.tf-out .hit { fill:none; stroke-width:14; opacity:.9; }
+.schem .el.tf-in .hit { stroke:var(--blue); } .schem .el.tf-out .hit { stroke:var(--orange, #eb6834); }
+.schem .figsig.tf-in .figline, .schem .figsig.tf-in path { stroke:var(--blue); stroke-width:4; }
+.schem .figsig.tf-out .figline, .schem .figsig.tf-out path { stroke:var(--orange, #eb6834); stroke-width:4; }
+.tf-panel h3 { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+.tf-chip { display:inline-block; padding:2px 9px; border-radius:99px; font-size:14px; font-weight:600; border:2px solid; }
+.tf-chip.in { border-color:var(--blue); } .tf-chip.out { border-color:var(--orange, #eb6834); }
+/* the controller as a PID */
+.schem .pid-part { cursor:pointer; } .schem .pid-part:hover rect { stroke-width:2.6; }
+.schem .pid-part.tf-in path, .schem .pid-part.tf-in rect { stroke:var(--blue); } .schem .pid-part.tf-out path, .schem .pid-part.tf-out rect { stroke:var(--orange, #eb6834); }
+.schem .link-txt { fill:var(--blue); cursor:pointer; text-decoration:underline; }
+.schem .blk.offloop.open { opacity:1; }   /* an opened controller stays readable in open loop (its border stays dashed) */

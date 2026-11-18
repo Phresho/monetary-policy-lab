@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { Analysis, AnalysisResult } from './Analysis';
 import { ModelMap } from './ModelMap';
 import { FlowsView } from './FlowsView';
+import { RobustView } from './RobustView';
 import { RunLibrary, SimView } from './SimView';
 import { api } from './api';
 import { Marker } from './Chart';
@@ -29,7 +30,7 @@ export default function App() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [extra, setExtra] = useState('I(Exchange_rate)');
-  const [tab, setTab] = useState<'sim' | 'freq' | 'flows' | 'map'>('map');  // the circuit map is the start page
+  const [tab, setTab] = useState<'sim' | 'freq' | 'robust' | 'flows' | 'map'>('map');  // the circuit map is the start page
   const [an, setAn] = useState<AnalysisResult>();
   const [anBusy, setAnBusy] = useState(false);
   const [tOp, setTOp] = useState(0);
@@ -103,8 +104,8 @@ export default function App() {
           <button className={!s.closed ? 'active' : ''} onClick={() => set({ closed: false })}>Open loop</button>
           <button className={s.closed ? 'active' : ''} onClick={() => set({ closed: true })}>Closed loop</button>
         </div>
-        {s.closed || tab === 'freq' ? <>
-          {tab === 'freq' && !s.closed && <p className="muted note">Analysis designs the rule; the open-loop setting only sets where the economy is linearised (the base rate below the plots).</p>}
+        {s.closed || tab === 'freq' || tab === 'robust' ? <>
+          {(tab === 'freq' || tab === 'robust') && !s.closed && <p className="muted note">Analysis designs the rule; the open-loop setting only sets where the economy is linearised (the base rate below the plots).</p>}
           <h2>Policy rule</h2>
           <p className="muted note">R = R* + Kp·(π − π*) + Ki·∫(π − π*) + Kd·filtered dπ/dt, smoothed by R15·C8 (207 units). Integral and derivative act from the start time.</p>
           <Slider label="Kp (proportional)" value={s.kp} min={0} max={2} step={0.01} onChange={v => set({ kp: v })} hint={`netlist ${nl.kp}`}/>
@@ -133,11 +134,13 @@ export default function App() {
           <button role="tab" aria-selected={tab === 'map'} className={tab === 'map' ? 'active' : ''} onClick={() => setTab('map')}>Circuit map</button>
           <button role="tab" aria-selected={tab === 'sim'} className={tab === 'sim' ? 'active' : ''} onClick={() => setTab('sim')}>Simulation</button>
           <button role="tab" aria-selected={tab === 'freq'} className={tab === 'freq' ? 'active' : ''} onClick={() => setTab('freq')}>Frequency analysis</button>
+          <button role="tab" aria-selected={tab === 'robust'} className={tab === 'robust' ? 'active' : ''} onClick={() => setTab('robust')}>Robust control</button>
           <button role="tab" aria-selected={tab === 'flows'} className={tab === 'flows' ? 'active' : ''} onClick={() => setTab('flows')}>Sector flows</button>
         </div>
         {error && <p className="notice bad">{error}</p>}
         {tab === 'map' ? <ModelMap scenario={run?.scenario ?? s} closed={run?.scenario.closed ?? s.closed} run={run} busy={busy} expectSec={run?.seconds ?? 12}/>
           : tab === 'flows' ? (run ? <FlowsView scenario={run.scenario}/> : <div className="panel empty"><p className="muted">Run a simulation first.</p></div>)
+          : tab === 'robust' ? <RobustView scenario={s} tOp={tOp} onApply={g => set({ ...g, closed: true })}/>
           : tab === 'freq' ? <Analysis a={an} busy={anBusy} tOp={tOp} setTOp={setTOp} closedMode={s.closed} scenario={s} onPick={(ki, kd) => set({ ki, kd, closed: true })}/>
           : !run ? <div className="panel empty"><p className="muted">{busy ? 'Running the first simulation…' : 'No run yet.'}</p></div> : <>
           <SimView cat={cat} run={run} compared={compared} markers={markers} extra={extra} setExtra={setExtra}/>

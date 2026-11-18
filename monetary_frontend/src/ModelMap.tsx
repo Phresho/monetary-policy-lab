@@ -1,7 +1,8 @@
 import { ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api } from './api';
 import { Chart } from './Chart';
-import { SavedRun } from './types';
+import { Plot } from './Plot';
+import { SavedRun, Scenario } from './types';
 import { sectorColor, Theme, useTheme, withAlpha } from './viz';
 
 // The circuit map, after the housing app's model map (Jesse), in layers that unfold in place:
@@ -153,6 +154,60 @@ const T_END = 13.33;
 type Sel = { type: 'block' | 'port' | 'node' | 'el' | 'instr'; id: string; q?: 'e' | 'f' };
 const fmt = (v: number) => !isFinite(v) ? '–' : Math.abs(v) >= 100 ? v.toFixed(1) : Math.abs(v) >= 1 ? v.toFixed(3) : v.toPrecision(3);
 
+// transfer function between two picked flows (POST /api/transfer): an extra flow into the first, the second's current
+interface TF { input: string; output: string; closed: boolean; note: string; w: number[]; cycle_yr: number[]; mag_db: number[]; phase_deg: number[];
+  dc_gain: number; zero: boolean; fit: { order: number; rel_rms_pct: number } | null; verdict?: string;
+  poles: { re: number; im: number; cycle_yr: number | null }[]; zeros: { re: number; im: number; cycle_yr: number | null }[]; step: { years: number[]; y: number[] } | null }
+// loop signals of the figure -> the element that carries them
+const INSTR_EL: Record<string, string> = { u: 'B§R', d: 'B§Shock', 'pi*': 'B§Target_CPI', pi: 'B§CPI_filtered', P: 'B§P' };
+const SIGNAL_NAME: Record<string, string> = { 'B§R': 'u = policy rate r', 'B§CPI_filtered': 'π (filtered inflation)', 'B§Target_CPI': 'π* (target)', 'B§Shock': 'd (shock)', 'B§P': 'price level P' };
+const LOGX = { type: 'log', title: { text: 'frequency (rad/yr)' }, exponentformat: 'power' };
+const cycTxt = (v: number) => v >= 1 ? `${v.toFixed(1)} yr` : v >= 1 / 12 ? `${(v * 12).toFixed(1)} months` : `${(v * 365).toFixed(0)} days`;
+
+// The controller as a classic PID (after the user's TikZ figure): e = π_f − π* splits into P, I and D, a bus sums
+// them into Σ with the neutral rate r*, the effective lower bound (the max(−0.5 %, …) of B_PI) clips the result, and
+// the smoothing R15·C8 gives the policy rate r. Units: the TikZ cm × 100, y up.
+function PidFigure({ sc, t, pick, onPart }: { sc?: Scenario; t: Theme; pick: (id: string) => string; onPart: (part: string, ctrl: boolean) => void }) {
+  const Y = (y: number) => -y * 100, X = (x: number) => x * 100;
+  const ink = t.ink, red = '#c0392b', box = { fill: t.panel, stroke: ink, strokeWidth: 1.6 };
+  const k = (v: number | undefined) => v == null ? '' : ` = ${Number(v.toPrecision(3))}`;
+  const filt = sc?.derivative !== 'netlist';
+  const part = (id: string, node: ReactNode) => <g className={'pid-part' + pick(id)} data-pid={id} onClick={e => { e.stopPropagation(); onPart(id, e.ctrlKey || e.metaKey); }}>{node}</g>;
+  const arrow = (d: string) => <path d={d} fill="none" stroke={ink} strokeWidth={1.6} markerEnd="url(#pid-ah)"/>;
+  const pidBox = (y: number, label: ReactNode, sub: string, id: string) => part(id, <>
+    <rect x={X(-1.3)} y={Y(y) - 37} width={260} height={74} {...box}/>
+    <text x={0} y={Y(y) - 4} textAnchor="middle" fontSize={26} fill={ink}>{label}</text>
+    <text x={0} y={Y(y) + 27} textAnchor="middle" fontSize={17} fill={t.ink2}>{sub}</text></>);
+  return <g className="pid">
+    <defs><marker id="pid-ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0 0 L10 5 L0 10 Z" fill={ink}/></marker></defs>
+    {part('e', <>{arrow(`M${X(-5.3)} 0 H${X(-2)}`)}<path d={`M${X(-5.3)} -14 H${X(-2)} V14 H${X(-5.3)} Z`} fill="transparent"/>
+      <text x={X(-4.7)} y={-10} fontSize={24} fill={ink}>e = π<tspan fontSize={16} dy={6}>f</tspan><tspan dy={-6}> − π*</tspan></text></>)}
+    <path d={`M${X(-1.95)} ${Y(1.15)} V${Y(-1.15)}`} stroke={ink} strokeWidth={1.6}/>
+    {arrow(`M${X(-1.95)} ${Y(1.15)} H${X(-1.3)}`)}{arrow(`M${X(-1.95)} 0 H${X(-1.3)}`)}{arrow(`M${X(-1.95)} ${Y(-1.15)} H${X(-1.3)}`)}
+    {pidBox(1.15, <>K<tspan fontSize={17} dy={5}>p</tspan><tspan dy={-5}> e</tspan></>, `Kp${k(sc?.kp)}`, 'P')}
+    {pidBox(0, <>K<tspan fontSize={17} dy={5}>i</tspan><tspan dy={-5}> ∫ e dσ</tspan></>, `Ki${k(sc?.ki)} · limited ±3 pt · from t₀`, 'I')}
+    {pidBox(-1.15, <>K<tspan fontSize={17} dy={5}>d</tspan><tspan dy={-5}> ė</tspan></>, filt ? `Kd${k(sc?.kd)} · filtered, τd${k(sc?.tau_d)} · ±2 pt` : `Kd${k(sc?.kd)} · on the level (netlist)`, 'D')}
+    <path d={`M${X(1.3)} ${Y(1.15)} H${X(2.15)} M${X(1.3)} 0 H${X(2.15)} M${X(1.3)} ${Y(-1.15)} H${X(2.15)} M${X(2.15)} ${Y(1.15)} V${Y(-1.15)}`} stroke={ink} strokeWidth={1.6} fill="none"/>
+    {arrow(`M${X(2.15)} 0 H${X(2.95 - 0.31)}`)}
+    <circle cx={X(2.95)} cy={0} r={31} {...box}/><text x={X(2.95)} y={9} textAnchor="middle" fontSize={28} fill={ink}>Σ</text>
+    {arrow(`M${X(2.95)} ${Y(1.3)} V${Y(0.31)}`)}<text x={X(2.95)} y={Y(1.36)} textAnchor="middle" fontSize={24} fill={ink}>r*{sc ? ` = ${sc.r_star.toFixed(2)} %` : ''}</text>
+    {arrow(`M${X(2.95 + 0.31)} 0 H${X(4.4)}`)}
+    {part('sat', <>
+      <rect x={X(4.4)} y={-65} width={130} height={130} {...box}/>
+      <path d={`M${X(4.5)} 0 H${X(5.4)} M${X(4.95)} -50 V50`} stroke={t.muted} strokeWidth={1}/>
+      <path d={`M${X(4.45)} 30 H${X(4.72)} L${X(5.4)} -38`} stroke={red} strokeWidth={2.4} fill="none"/>
+      <text x={X(4.95)} y={92} textAnchor="middle" fontSize={20} fill={red}>r̲ = −0.5 %</text></>)}
+    {arrow(`M${X(5.7)} 0 H${X(6.45)}`)}
+    {part('smooth', <>
+      <rect x={X(6.45)} y={-37} width={150} height={74} {...box} strokeDasharray="6 4"/>
+      <text x={X(7.2)} y={-2} textAnchor="middle" fontSize={21} fill={ink}>1/(1 + 207 s)</text>
+      <text x={X(7.2)} y={26} textAnchor="middle" fontSize={16} fill={t.ink2}>smoothing R15·C8</text></>)}
+    {part('r', <>{arrow(`M${X(7.95)} 0 H${X(8.9)}`)}<path d={`M${X(7.95)} -14 H${X(8.9)} V14 H${X(7.95)} Z`} fill="transparent"/>
+      <text x={X(8.42)} y={-10} textAnchor="middle" fontSize={26} fill={ink}>r</text></>)}
+  </g>;
+}
+const PID_VB = '-545 -180 1460 300';
+
 // current along the drawn wires (POST /api/wireflow), positive in a segment's drawn direction
 type WireFlow = { years: number[]; segments: { w: number; p: number[]; node: string; i: number[] }[] };
 const PLAY_SECONDS = 20;   // playing the whole run (13.3 years) takes this long
@@ -164,6 +219,7 @@ const DOT_TRAVEL = 400;
 export function ModelMap({ scenario, closed, run, busy = false, expectSec = 12 }: { scenario: unknown; closed: boolean; run?: SavedRun; busy?: boolean; expectSec?: number }) {
   const t = useTheme();
   const KIND = kindColor(t);
+  const sc = scenario as Scenario | undefined;
   const [m, setM] = useState<MapData>();
   const [dash, setDash] = useState<DashVar[]>([]);
   const [vals, setVals] = useState<DashVals>();
@@ -178,6 +234,13 @@ export function ModelMap({ scenario, closed, run, busy = false, expectSec = 12 }
   const [wfError, setWfError] = useState('');     // why the wire currents could not be fetched
   const [dashOpen, setDashOpen] = useState<string>();   // the imported variable whose tile is opened (chart inside it)
   const [whole, setWhole] = useState(false);
+  const [tfPick, setTfPick] = useState<string[]>([]);   // ctrl-clicked flows: [input, output]
+  const [tfClosed, setTfClosed] = useState(closed);
+  const [tf, setTf] = useState<TF>();
+  const [tfBusy, setTfBusy] = useState(false);
+  const [tfError, setTfError] = useState('');
+  const [ctrlDrawing, setCtrlDrawing] = useState(false);   // the opened controller: PID figure (default) or the .asc drawing
+  const tfBox = useRef<HTMLDivElement>(null);
   const [sel, setSel] = useState<Sel>();
   const [hover, setHover] = useState<string>();
   const [trace, setTrace] = useState<Trace>();
@@ -221,6 +284,25 @@ export function ModelMap({ scenario, closed, run, busy = false, expectSec = 12 }
     return () => { live = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [scenarioKey, busy, run]);
+  useEffect(() => setTfClosed(closed), [closed]);
+  useEffect(() => {
+    if (tfPick.length < 2) { setTf(undefined); setTfError(''); return; }
+    let live = true; setTfBusy(true); setTfError('');
+    api<TF>('/transfer', { scenario, input: tfPick[0], output: tfPick[1], closed: tfClosed, t_op_years: 0 })
+      .then(r => { if (live) setTf(r); })
+      .catch(e => { if (live) { setTf(undefined); setTfError(e instanceof Error ? e.message : String(e)); } })
+      .finally(() => { if (live) setTfBusy(false); });
+    window.setTimeout(() => tfBox.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' }), 50);
+    return () => { live = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tfPick.join('|'), tfClosed, scenarioKey]);
+  useEffect(() => {   // Escape clears the picked flows
+    const k = (e: KeyboardEvent) => { if (e.key === 'Escape') setTfPick([]); };
+    window.addEventListener('keydown', k); return () => window.removeEventListener('keydown', k);
+  }, []);
+  // ctrl-click: the first pick is the input, the second the output; a third starts again
+  const addPick = (el: string) => setTfPick(p => p.length >= 2 ? [el] : p.length === 1 && p[0] === el ? [] : [...p, el]);
+  const pickCls = (el: string) => tfPick[0] === el ? ' tf-in' : tfPick[1] === el ? ' tf-out' : '';
   useEffect(() => {   // playback: T_END years in PLAY_SECONDS
     if (!playing) return;
     let raf = 0, last = performance.now();
@@ -280,9 +362,10 @@ export function ModelMap({ scenario, closed, run, busy = false, expectSec = 12 }
   const boxOf = useCallback((id: string) => boxIn(id, lay, plantOpen), [boxIn, lay, plantOpen]);
   // the controller and the output open over the loop (their circuit grows around the block's centre)
   const expanded = useCallback((id: string): Box => {
-    const b = boxOf(id), w = Math.max(b.w * 2.8, 760), h = Math.max(b.h * 2.8, 500);
+    const b = boxOf(id), pid = id === 'Controller' && !ctrlDrawing;
+    const w = pid ? 1180 : Math.max(b.w * 2.8, 760), h = pid ? 470 : Math.max(b.h * 2.8, 500);
     return { x: Math.max(-200, b.x + b.w / 2 - w / 2), y: Math.max(-100, b.y + b.h / 2 - h / 2), w, h };
-  }, [boxOf]);
+  }, [boxOf, ctrlDrawing]);
   const visible = useCallback((id: string): string => { let v = id; while (PARENT[v] && !open.includes(PARENT[v])) v = PARENT[v]; return v; }, [open]);
   const shownBlocks = useMemo(() => {
     const out = [...LOOP];
@@ -427,6 +510,7 @@ export function ModelMap({ scenario, closed, run, busy = false, expectSec = 12 }
   if (error) return <p className="notice bad">{error}</p>;
   if (!m) return <div className="panel empty"><p className="muted">Loading the circuit…</p></div>;
 
+  const nameOf = (el: string) => SIGNAL_NAME[el] ?? m.elements.find(x => x.name === el)?.ref.replace(/_/g, ' ') ?? el;
   const colorOf = (id: string) => id === 'Banks' ? sectorColor(t, 'Wholesale banks') : id === 'NFC' ? sectorColor(t, 'Domestic goods producers') : sectorColor(t, id);
   const loopStyle = (id: string) => id === 'Target setting' ? FIG.target : id === 'Controller' ? FIG.ctrl : id === 'Rate path' ? FIG.path : id === PLANT ? FIG.plant : id === 'Output' ? FIG.output : null;
   const pathD = (q: number[][]) => 'M' + q.map(p => p.join(' ')).join(' L');
@@ -447,7 +531,7 @@ export function ModelMap({ scenario, closed, run, busy = false, expectSec = 12 }
         : <text key={i} x={f.x + 8} y={f.y - 10} className="flag" fontSize={fs * 0.8}>{f.name}</text>)}
       {els.map(e => {
         const cx = (e.pins[0][0] + e.pins[1][0]) / 2, cy = (e.pins[0][1] + e.pins[1][1]) / 2, on = sel?.type === 'el' && sel.id === e.name;
-        return <g key={e.name} data-el={e.name} className={'el' + (on ? ' sel' : '')}>
+        return <g key={e.name} data-el={e.name} className={'el' + (on ? ' sel' : '') + pickCls(e.name)}>
           <g transform={transform(e)} style={{ stroke: KIND[e.kind] }} className="glyph"><Glyph symbol={e.symbol}/></g>
           <circle cx={cx} cy={cy} r={46} className="mark" style={{ fill: KIND[e.kind] }}/>
           <circle cx={cx} cy={cy} r={Math.max(56, 9 * px * k)} className="hit"/>
@@ -482,9 +566,25 @@ export function ModelMap({ scenario, closed, run, busy = false, expectSec = 12 }
     const title = TITLE[id];
     const dr = drawingOf(id), r = dr ? rects[dr] : undefined;
     let innerSvg: ReactNode = null;
-    if (isOpen && r && leaf && !plantBox) {   // controller / output: their circuit fitted in the grown block
+    if (isOpen && id === 'Controller' && !ctrlDrawing) {   // the controller as a classic PID
+      const iw = b.w - 24, ih = b.h - HEAD - 66;
+      const pidPick = (part: string) => part === 'r' ? pickCls('B§R') : part === 'e' ? pickCls('B§CPI_filtered') : '';
+      innerSvg = <>
+        <rect x={b.x + 1} y={b.y + HEAD} width={b.w - 2} height={b.h - HEAD - 1} style={{ fill: mix(t.panel, FIG.ctrl.fill, 0.67), stroke: 'none' }}/>
+        <svg x={b.x + 12} y={b.y + HEAD + 10} width={iw} height={ih} viewBox={PID_VB} preserveAspectRatio="xMidYMid meet" className="inner-circuit pid-svg">
+          <PidFigure sc={sc} t={t} pick={pidPick} onPart={(part, ctrl) => {
+            const elOf = part === 'r' ? 'B§R' : part === 'e' ? 'B§CPI_filtered' : 'B_PI';
+            if (ctrl) { if (part === 'r' || part === 'e') addPick(elOf); return; }
+            setSel(part === 'r' ? { type: 'instr', id: 'u' } : { type: 'el', id: elOf });
+          }}/>
+        </svg>
+        <text x={b.x + 16} y={b.y + b.h - 38} fontSize={16} style={{ fill: t.ink2 }}>The rule B_PI of your drawing: r = smoothing of max(r̲, r* + Kp·e + Ki·∫e + Kd·ė). Click a part for its expression and trace; ctrl-click e or r to pick it.</text>
+        <text x={b.x + 16} y={b.y + b.h - 14} fontSize={16} className="link-txt" data-ctrlview="1">Show the LTspice drawing of the Central Bank instead</text>
+      </>;
+    } else if (isOpen && r && leaf && !plantBox) {   // controller / output: their circuit fitted in the grown block
       const vw = r.x2 - r.x1 + 80, vh = r.y2 - r.y1 + 80, iw = b.w - 12, ih = b.h - HEAD - 8, k = Math.max(vw / iw, vh / ih);
-      innerSvg = <svg x={b.x + 6} y={b.y + HEAD + 2} width={iw} height={ih} viewBox={`${r.x1 - 40} ${r.y1 - 40} ${vw} ${vh}`} preserveAspectRatio="xMidYMid meet" className="inner-circuit">{circuit(dr!, k)}</svg>;
+      innerSvg = <><svg x={b.x + 6} y={b.y + HEAD + 2} width={iw} height={ih - (id === 'Controller' ? 26 : 0)} viewBox={`${r.x1 - 40} ${r.y1 - 40} ${vw} ${vh}`} preserveAspectRatio="xMidYMid meet" className="inner-circuit">{circuit(dr!, k)}</svg>
+        {id === 'Controller' && <text x={b.x + 16} y={b.y + b.h - 14} fontSize={15} className="link-txt" data-ctrlview="1">Show the controller as a PID diagram</text>}</>;
     }
     return <g key={id} className={'blk' + (isOpen ? ' open' : '') + (selected ? ' sel' : '') + (hl ? ' focus' : '') + (fig ? ' fig' : '') + (offLoop ? ' offloop' : '')} data-block={id}
       onPointerEnter={() => setHover(id)} onPointerLeave={() => setHover(h => h === id ? undefined : h)}>
@@ -564,7 +664,7 @@ export function ModelMap({ scenario, closed, run, busy = false, expectSec = 12 }
           {wfError && <span className="small tb-error" title={wfError}>{/404|Not Found/i.test(wfError) ? 'The server is older than this page: restart start_monetary.cmd to see the currents.' : `Currents not available: ${wfError}`}</span>}
         </>}
       </div>
-      <p className="muted note">Click <b>+</b> to open a block: the plant is your drawing, with each agent's circuit under its box; opening a box lifts it (Banks and NFC first show their sub-agents). The wires between the agents are your own. Click a port mark <b>f</b> on a box edge, a wire, the input u, an element or a dashboard tile to plot it. The loop follows the Open / Closed switch on the left.</p>
+      <p className="muted note">Click <b>+</b> to open a block: the plant is your drawing, with each agent's circuit under its box; opening a box lifts it (Banks and NFC first show their sub-agents). The wires between the agents are your own. Click a port mark <b>f</b> on a box edge, a wire, the input u, an element or a dashboard tile to plot it. <b>Ctrl-click two flows</b> (elements, port marks or the loop signals u, π, π*, d) for the transfer function from the first to the second; Esc clears. The loop follows the Open / Closed switch on the left.</p>
       <svg ref={svg} className="schem blockmap" viewBox={vb.join(' ')} preserveAspectRatio="xMidYMid meet" role="img" aria-label="Circuit map"
         onPointerDown={e => { if (e.button === 0) drag.current = { x: e.clientX, y: e.clientY, vb, moved: false }; }}
         onPointerMove={e => {
@@ -580,6 +680,15 @@ export function ModelMap({ scenario, closed, run, busy = false, expectSec = 12 }
           if (!d || d.moved) return;
           const hit = document.elementFromPoint(e.clientX, e.clientY) as Element | null;
           const tg = hit?.closest('[data-toggle]'), elh = hit?.closest('[data-el]'), pm = hit?.closest('[data-port]'), wn = hit?.closest('[data-node]'), ins = hit?.closest('[data-instr]'), bl = hit?.closest('[data-block]');
+          if (hit?.closest('[data-pid]')) return;   // the PID figure handles its own clicks
+          if (hit?.closest('[data-ctrlview]')) { setCtrlDrawing(v => !v); return; }
+          if (e.ctrlKey || e.metaKey) {   // ctrl-click: pick a flow for the transfer function
+            const carrier = pm ? (() => { const [box, node] = pm.getAttribute('data-port')!.split('|');
+              return m!.elements.find(x => x.nodes.includes(node) && (x.sector === box || (!!x.sector && within(box, x.sector))) && ['inductor', 'behavioural current', 'current source'].includes(x.kind))?.name; })() : undefined;
+            const picked = elh ? elh.getAttribute('data-el')! : ins ? INSTR_EL[ins.getAttribute('data-instr')!] : carrier;
+            if (picked) addPick(picked);
+            return;
+          }
           if (tg) toggle(tg.getAttribute('data-toggle')!);
           else if (hit?.closest('[data-scrim]') && loopLeaf) toggle(loopLeaf);
           else if (elh) setSel({ type: 'el', id: elh.getAttribute('data-el')! });
@@ -597,7 +706,7 @@ export function ModelMap({ scenario, closed, run, busy = false, expectSec = 12 }
           <rect x={RG.x} y={RG.y} width={RG.w} height={RG.h} rx={10} className="fig-region" style={{ fill: withAlpha(FIG.region.fill, 0.55), stroke: FIG.region.stroke }}/>
           <text x={RG.x + RG.w / 2} y={RG.y + RG.h - 18} textAnchor="middle" className="fig-region-title">ECB macroeconomic models</text>
           <g className="figloop">
-            <g data-instr="pi*" className="figsig">{L(`M${TARGET.x + TARGET.w} ${SUM.y} H${SUM.x - SUM.r}`)}{lab((TARGET.x + TARGET.w + SUM.x - SUM.r) / 2, SUM.y - 12, 'π*', 'figsym')}{lab((TARGET.x + TARGET.w + SUM.x) / 2, SUM.y + 30, 'Setpoint')}{lab((TARGET.x + TARGET.w + SUM.x) / 2, SUM.y + 50, '(Target)')}</g>
+            <g data-instr="pi*" className={"figsig" + pickCls(INSTR_EL["pi*"])}>{L(`M${TARGET.x + TARGET.w} ${SUM.y} H${SUM.x - SUM.r}`)}{lab((TARGET.x + TARGET.w + SUM.x - SUM.r) / 2, SUM.y - 12, 'π*', 'figsym')}{lab((TARGET.x + TARGET.w + SUM.x) / 2, SUM.y + 30, 'Setpoint')}{lab((TARGET.x + TARGET.w + SUM.x) / 2, SUM.y + 50, '(Target)')}</g>
             <circle cx={SUM.x} cy={SUM.y} r={SUM.r} className="fig-sum"/>
             <path d={`M${SUM.x - SUM.r * 0.7} ${SUM.y - SUM.r * 0.7} L${SUM.x + SUM.r * 0.7} ${SUM.y + SUM.r * 0.7} M${SUM.x + SUM.r * 0.7} ${SUM.y - SUM.r * 0.7} L${SUM.x - SUM.r * 0.7} ${SUM.y + SUM.r * 0.7}`} className="fig-sumx"/>
             {lab(SUM.x - SUM.r - 6, SUM.y - SUM.r - 4, '+', 'figsign', 'end')}{lab(SUM.x - SUM.r - 6, SUM.y + SUM.r + 18, '−', 'figsign', 'end')}
@@ -608,14 +717,14 @@ export function ModelMap({ scenario, closed, run, busy = false, expectSec = 12 }
             <g className="fig-switch"><circle cx={sw.a[0]} cy={sw.a[1]} r={4}/><circle cx={sw.b[0]} cy={sw.b[1]} r={4}/><circle cx={sw.p[0]} cy={sw.p[1]} r={4}/>
               <line x1={sw.p[0]} y1={sw.p[1]} x2={closed ? sw.a[0] + 4 : sw.b[0] + 3} y2={closed ? sw.a[1] : sw.b[1] - 3} className="lever"/>
               {lab(sw.p[0], sw.b[1] + 30, closed ? 'u from the controller' : 'u from the rate path', 'figlab small')}</g>
-            <g data-instr="u" className={'figsig' + (sel?.type === 'instr' ? ' on' : '')}>
+            <g data-instr="u" className={'figsig' + (sel?.type === 'instr' ? ' on' : '') + pickCls('B§R')}>
               <path d={`M${sw.p[0]} ${yc} H${P.x}`} className="figsig-hit"/>{L(`M${sw.p[0] + 4} ${yc} H${P.x}`)}
               {lab((sw.p[0] + P.x) / 2, yc - 12, 'u', 'figsym')}{lab((sw.p[0] + P.x) / 2, yc + 26, 'policy rate r', 'figlab small')}
             </g>
-            <g data-instr="d" className="figsig dist">{L(`M${dx} ${P.y - 190} V${P.y}`, ' red')}{lab(dx + 12, P.y - 110, 'd', 'figsym red', 'start')}
+            <g data-instr="d" className={"figsig dist" + pickCls(INSTR_EL["d"])}>{L(`M${dx} ${P.y - 190} V${P.y}`, ' red')}{lab(dx + 12, P.y - 110, 'd', 'figsym red', 'start')}
               {lab(dx - 14, P.y - 150, 'Disturbance', 'figlab red', 'end')}{lab(dx - 14, P.y - 126, '(Economic shock)', 'figlab red', 'end')}</g>
-            <g data-instr="P" className="figsig">{L(`M${P.x + P.w} ${O.y + O.h / 2} H${O.x}`)}{lab((P.x + P.w + O.x) / 2, O.y + O.h / 2 - 12, 'P', 'figsym')}</g>
-            <g data-instr="pi" className="figsig">
+            <g data-instr="P" className={"figsig" + pickCls(INSTR_EL["P"])}>{L(`M${P.x + P.w} ${O.y + O.h / 2} H${O.x}`)}{lab((P.x + P.w + O.x) / 2, O.y + O.h / 2 - 12, 'P', 'figsym')}</g>
+            <g data-instr="pi" className={"figsig" + pickCls(INSTR_EL["pi"])}>
               {closed ? L(`M${O.x + O.w / 2} ${O.y + O.h} V${fbY} H${SUM.x} V${SUM.y + SUM.r}`)
                 : <>{/* open loop: the feedback is cut at the switch */}
                   <path d={`M${O.x + O.w / 2} ${O.y + O.h} V${fbY} H${swx + 24}`} className="figline"/>
@@ -657,7 +766,7 @@ export function ModelMap({ scenario, closed, run, busy = false, expectSec = 12 }
               : 40 * K / px >= 4 && <text key={i} x={f.x + 8} y={f.y - 10} className="flag" fontSize={40}>{f.name}</text>)}
             {plantDraw.els.map(e => {
               const cx = (e.pins[0][0] + e.pins[1][0]) / 2, cy = (e.pins[0][1] + e.pins[1][1]) / 2, onE = sel?.type === 'el' && sel.id === e.name;
-              return <g key={e.name} data-el={e.name} className={'el' + (onE ? ' sel' : '')}>
+              return <g key={e.name} data-el={e.name} className={'el' + (onE ? ' sel' : '') + pickCls(e.name)}>
                 <g transform={transform(e)} style={{ stroke: KIND[e.kind] }} className="glyph"><Glyph symbol={e.symbol}/></g>
                 <circle cx={cx} cy={cy} r={46} className="mark" style={{ fill: KIND[e.kind] }}/>
                 <circle cx={cx} cy={cy} r={Math.max(56, 9 * px / K)} className="hit"/>
@@ -681,6 +790,41 @@ export function ModelMap({ scenario, closed, run, busy = false, expectSec = 12 }
           {loopLeaf && block(loopLeaf)}
         </>}
       </svg>
+      {tfPick.length > 0 && <section className="panel tf-panel" ref={tfBox} aria-live="polite">
+        <div className="pick-row">
+          <h3>Transfer function <span className="tf-chip in">{nameOf(tfPick[0])}</span> → {tfPick[1] ? <span className="tf-chip out">{nameOf(tfPick[1])}</span> : <span className="muted small">ctrl-click a second flow (the output)</span>}</h3>
+          <div className="segmented small-seg" role="group" aria-label="Loop">
+            <button className={!tfClosed ? 'active' : ''} onClick={() => setTfClosed(false)}>open loop</button>
+            <button className={tfClosed ? 'active' : ''} onClick={() => setTfClosed(true)}>closed loop (the rule's gains)</button>
+          </div>
+          <button className="ghost" onClick={() => setTfPick(p => p.length === 2 ? [p[1], p[0]] : p)} disabled={tfPick.length < 2}>Swap</button>
+          <button className="ghost" onClick={() => setTfPick([])}>Clear</button>
+        </div>
+        {tfPick.length === 2 && <p className="muted note">An extra flow d is pushed into <b>{nameOf(tfPick[0])}</b>, and the response of <b>{nameOf(tfPick[1])}</b> per unit of d is computed. The model is linearised at the steady state by ngspice's AC analysis. {tfClosed ? 'Closed loop: the rule answers the inflation that d causes.' : 'Open loop: the policy rate is held fixed.'} {tf?.note}</p>}
+        {tfError && <p className="notice bad">{tfError}</p>}
+        {tfBusy && <p className="muted note">Linearising (the first time about 5 s)…</p>}
+        {tf && !tfBusy && (tf.zero ? <p className="notice warn">The response is zero: in the linearised model no path leads from {nameOf(tf.input)} to {nameOf(tf.output)}{tf.closed ? '' : ' with the loop open'}.</p> : <>
+          <div className="kpis">
+            <div className="kpi"><span>Long-run gain (DC)</span><strong>{Number(tf.dc_gain.toPrecision(3))}</strong><small>response per unit of extra flow, at the slowest frequency</small></div>
+            <div className="kpi"><span>Peak gain</span><strong>{Math.max(...tf.mag_db).toFixed(1)} <em>dB</em></strong><small>at a cycle of {cycTxt(tf.cycle_yr[tf.mag_db.indexOf(Math.max(...tf.mag_db))])}</small></div>
+            <div className={`kpi verdict ${tf.verdict === 'unstable' ? 'bad' : 'good'}`}><span>Fitted model</span><strong>{tf.verdict === 'unstable' ? '✕ unstable poles' : '✓ ' + (tf.verdict === 'drift' ? 'stable, slow drift' : 'stable')}</strong>
+              <small>{tf.fit ? `order ${tf.fit.order}, error ${tf.fit.rel_rms_pct.toFixed(2)} %` : ''}</small></div>
+          </div>
+          <div className="grid2">
+            <Plot title="Magnitude" height={250} data={[{ type: 'scatter', mode: 'lines', name: 'gain', x: tf.w, y: tf.mag_db, customdata: tf.cycle_yr.map(cycTxt), line: { color: t.inflation, width: 2.2 }, hovertemplate: '%{y:.1f} dB<extra>cycle %{customdata}</extra>' }]}
+              layout={{ xaxis: LOGX, yaxis: { title: { text: 'dB' } } }}/>
+            <Plot title="Phase" height={250} data={[{ type: 'scatter', mode: 'lines', name: 'phase', x: tf.w, y: tf.phase_deg, customdata: tf.cycle_yr.map(cycTxt), line: { color: t.inflation, width: 2.2 }, hovertemplate: '%{y:.0f}°<extra>cycle %{customdata}</extra>' }]}
+              layout={{ xaxis: LOGX, yaxis: { title: { text: 'degrees' } } }}/>
+            {tf.step ? <Plot title="Step response (unit extra flow from t = 0)" height={250} data={[{ type: 'scatter', mode: 'lines', name: 'response', x: tf.step.years, y: tf.step.y, line: { color: t.inflation, width: 2.2 } }]}
+              layout={{ xaxis: { title: { text: 'years' } }, yaxis: { title: { text: 'response' } } }} note="From the fitted rational model (small-signal)."/>
+              : <p className="muted note">No step response: the fit is not accurate enough or has unstable poles.</p>}
+            <Plot title="Poles and zeros of the fitted model" height={250}
+              data={[{ type: 'scatter', mode: 'markers', name: 'poles', x: tf.poles.map(q => q.re), y: tf.poles.map(q => q.im), marker: { symbol: 'x', size: 10, color: t.inflation }, hovertemplate: 'Re %{x:.3f}, Im %{y:.2f} /yr<extra>pole</extra>' },
+                { type: 'scatter', mode: 'markers', name: 'zeros', x: tf.zeros.map(q => q.re), y: tf.zeros.map(q => q.im), marker: { symbol: 'circle-open', size: 9, color: t.rate }, hovertemplate: 'Re %{x:.3f}, Im %{y:.2f} /yr<extra>zero</extra>' }]}
+              layout={{ xaxis: { title: { text: 'Re (1/yr)' }, zeroline: true, range: [-30, 10] }, yaxis: { title: { text: 'Im (rad/yr)' }, range: [-80, 80] } }}/>
+          </div>
+        </>)}
+      </section>}
       <p className="muted note legend-line">Wires as in your .asc: coloured by the agent that holds the node (the hub of its flows), grey for the return (ground) · <b>f</b> marks: a flow wire crossing an agent's edge, small rings: its return · loop blocks in the colours of the ECB figure</p>
 
       {/* the dashboard: the current sources outside the plant boxes, which the plant imports */}

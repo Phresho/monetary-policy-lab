@@ -268,3 +268,55 @@ def test_wire_currents_follow_the_elements_and_balance():
             assert np.allclose(sgn * np.array(r["segments"][k]["i"]), pushed, rtol=2e-3, atol=1e-7 + 2e-3 * np.abs(pushed).max())
             checked += 1
     assert checked > 50
+
+
+# ---------------------------------------------------------------- transfer function between two flows
+from monetary import transfer as tf
+
+
+def test_transfer_from_the_rate_is_the_plant_and_closes_with_the_loop():
+    """Open loop, R -> inflation is the frequency analysis' plant P; closed loop it is P S; the target reaches
+    inflation with gain 1 at the slowest frequency (integral action)."""
+    s = Scenario(closed=True)
+    p = fr.plant(s, 0.0)
+    P = p["resp"][fr.OUTPUT]
+    o = tf.transfer(s, "B§R", "B§CPI_filtered", closed=False)
+    assert np.allclose(o["mag_db"], 20 * np.log10(np.abs(P)), atol=1e-3)
+    c = tf.transfer(s, "B§R", "B§CPI_filtered", closed=True)
+    L = -P * fr.controller(s, p["w"]) * fr.smoothing(p["w"])
+    assert np.allclose(c["mag_db"], 20 * np.log10(np.abs(P / (1 + L))), atol=1e-3)
+    assert tf.transfer(s, "B§Target_CPI", "B§CPI_filtered", closed=True)["dc_gain"] == pytest.approx(1.0, abs=0.01)
+
+
+def test_transfer_with_zero_gains_is_the_open_loop_and_controller_parts_are_refused():
+    s = Scenario(closed=True, kp=0.06, ki=0.0, kd=0.0)
+    flow = [e["name"] for e in schematic.model_map()["elements"] if e["ref"] == "Investment"][0]
+    o = tf.transfer(s.model_copy(update={"kp": 0.0}), flow, "B§GDP_real", closed=False)
+    c = tf.transfer(s.model_copy(update={"kp": 0.0}), flow, "B§GDP_real", closed=True)
+    assert np.allclose(o["mag_db"], c["mag_db"], atol=1e-6)
+    with pytest.raises(ValueError):
+        tf.transfer(s, "B_PI", "B§CPI_filtered", closed=True)
+
+
+# ---------------------------------------------------------------- robust control: H-infinity and mu
+from monetary import robust as rb
+
+
+def test_mu_tuning_lowers_mu_and_keeps_the_plant_set_stable():
+    s = Scenario(closed=True)
+    W = rb.Weights(M=2.0, wB=2.0, delta=0.1, ks_max=2.0)
+    e = rb.evaluate(s, 0.0, W)
+    assert len(e["family"]) == 7 and min(e["WT"]) >= 0.1
+    assert e["peaks"]["rp"] == pytest.approx(max(a + b for a, b in zip(e["mu"]["np"], e["mu"]["rs"])), rel=1e-4)
+    for method, key in (("mu", "rp"), ("hinf", "gamma")):
+        r = rb.tune(s, 0.0, W, method)
+        assert r["gains"]["kp"] == s.kp and r["after"][key] < r["before"][key] - 0.05
+        after = rb.evaluate(s.model_copy(update=r["gains"]), 0.0, W)
+        assert after["family_stable"] == after["family_n"]
+
+
+def test_steady_start_with_a_larger_kp():
+    """The secant steps find the start inflation where the plain iteration ran out of rounds (Kp 0.15)."""
+    from monetary.scenario import run
+    r = run(Scenario(closed=True, kp=0.15, ki=0.03, kd=1.0))
+    assert abs(r["metrics"]["inflation_end_pct"] - 2.0) < 0.1

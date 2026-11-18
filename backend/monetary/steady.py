@@ -100,16 +100,34 @@ def initial_inflation(lines: list[str], ic_signals: dict[str, float], override: 
     return float(120 * np.polyfit(t[m], p[m], 1)[0])
 
 
-def steady_start(lines: list[str], ic_signals: dict[str, float], rounds: int = 4) -> Steady:
+def steady_start(lines: list[str], ic_signals: dict[str, float], rounds: int = 10) -> Steady:
     """solve(), with CPI_filtered starting at the inflation the solved economy actually has. In closed loop that
-    start value moves the policy rate and so the steady state, hence a few rounds (converges in 2-3)."""
+    start value moves the policy rate and so the steady state: a fixed point pi = F(pi), found with secant steps on
+    F(pi) - pi (the plain iteration converges in 2-3 rounds at Kp 0.06 but slowly or not at all for a larger Kp,
+    where F is steeper; 18 Nov 2026). If the root finder fails at a guess, the last solved inflation is tried."""
     ic = dict(ic_signals)
+    xs: list[float] = []
+    gs: list[float] = []
+    last_y = None
     for _ in range(rounds):
-        s = solve(lines, ic)
-        pi0 = initial_inflation(lines, ic, s.override)
-        if abs(pi0 - ic["I(CPI)"]) < 1e-5:
-            break
-        ic["I(CPI)"] = pi0
-    else:
-        raise RuntimeError("initial inflation did not settle")
-    return s
+        x = ic["I(CPI)"]
+        try:
+            s = solve(lines, ic)
+        except RuntimeError:
+            if last_y is None or abs(last_y - x) < 1e-12:
+                raise
+            ic["I(CPI)"] = last_y   # back to a value the economy produced itself
+            xs.clear(); gs.clear()
+            continue
+        y = initial_inflation(lines, ic, s.override)
+        g = y - x
+        if abs(g) < 1e-5:
+            return s
+        last_y = y
+        xs.append(x); gs.append(g)
+        if len(xs) >= 2 and abs(gs[-1] - gs[-2]) > 1e-14:
+            x_new = xs[-1] - gs[-1] * (xs[-1] - xs[-2]) / (gs[-1] - gs[-2])
+        else:
+            x_new = y
+        ic["I(CPI)"] = x_new
+    raise RuntimeError("initial inflation did not settle")
