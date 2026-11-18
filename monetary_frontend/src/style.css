@@ -204,3 +204,10 @@ table.data td.small { font-size:12px; color:var(--ink2); white-space:normal; }
 @keyframes dots100 { to { stroke-dashoffset:-100; } } @keyframes dots200 { to { stroke-dashoffset:-200; } } @keyframes dots400 { to { stroke-dashoffset:-400; } }
 @keyframes dots800 { to { stroke-dashoffset:-800; } } @keyframes dots1600 { to { stroke-dashoffset:-1600; } }
 @media (prefers-reduced-motion: reduce) { .schem .flow-dots { animation:none; } }
+
+/* time bar notes; an imported variable opened in place, its chart inside the tile */
+.tb-hint { color:var(--ink2); } .tb-error { color:var(--bad); font-weight:600; }
+.dash-tile.open { grid-column:1 / -1; cursor:default; border-color:var(--blue); box-shadow:0 0 0 2px var(--blue-soft); padding:10px 12px; }
+.dash-open-head { display:flex; justify-content:space-between; align-items:flex-start; width:100%; }
+.dash-open-title { display:flex; flex-direction:column; gap:1px; } .dash-tile.open .chart { width:100%; }
+.dash-tile.open .pin-close { border:0; background:none; color:var(--muted); font-size:20px; line-height:1; padding:0 2px; }

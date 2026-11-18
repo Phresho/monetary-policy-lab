@@ -172,6 +172,8 @@ export function ModelMap({ scenario, closed, run, busy = false, expectSec = 12 }
   const [tNow, setTNow] = useState(0);            // the moment shown by the dots and the time bar (years)
   const [playing, setPlaying] = useState(false);
   const [elapsed, setElapsed] = useState(0);      // seconds since the running simulation started
+  const [wfError, setWfError] = useState('');     // why the wire currents could not be fetched
+  const [dashOpen, setDashOpen] = useState<string>();   // the imported variable whose tile is opened (chart inside it)
   const [whole, setWhole] = useState(false);
   const [sel, setSel] = useState<Sel>();
   const [hover, setHover] = useState<string>();
@@ -205,15 +207,17 @@ export function ModelMap({ scenario, closed, run, busy = false, expectSec = 12 }
   const plantOpen = open.includes(PLANT);
 
   // ---------------------------------------------------------------- time: playback and the running simulation
-  // the wires' currents of the active run, fetched once the plant is open; a new run plays from the start
+  // the wires' currents of the active run, fetched after every run (the run itself is cached, so this is quick);
+  // the time bar sets the moment the dots show, nothing plays by itself
   const scenarioKey = JSON.stringify(scenario);
   useEffect(() => {
-    if (!plantOpen || busy) return;
+    if (busy || !run) return;
     let live = true;
-    api<WireFlow>('/wireflow', scenario).then(r => { if (live) { setWf(r); setTNow(0); setPlaying(true); } }).catch(() => undefined);
+    api<WireFlow>('/wireflow', scenario).then(r => { if (live) { setWf(r); setWfError(''); } })
+      .catch(e => { if (live) { setWf(undefined); setWfError(String(e instanceof Error ? e.message : e)); } });
     return () => { live = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [plantOpen, scenarioKey, busy]);
+  }, [scenarioKey, busy, run]);
   useEffect(() => {   // playback: T_END years in PLAY_SECONDS
     if (!playing) return;
     let raf = 0, last = performance.now();
@@ -500,6 +504,7 @@ export function ModelMap({ scenario, closed, run, busy = false, expectSec = 12 }
   // the time window applied to a trace (charts) and to the dashboard series
   const inWin = (years: number[], values: number[]) => { const x: number[] = [], y: number[] = []; years.forEach((v, i) => { if (v >= win[0] - 1e-9 && v <= win[1] + 1e-9) { x.push(v); y.push(values[i]); } }); return { x, y }; };
   const wTrace = trace ? inWin(trace.years, trace.values) : undefined;
+  const nowMark = wf && tNow >= win[0] && tNow <= win[1] ? [{ x: tNow, label: ` t = ${tNow.toFixed(1)}` }] : [];
   const at = (ys: number[], v: number) => { const yrs = vals!.years; let i = yrs.findIndex(t2 => t2 >= v - 1e-9); if (i < 0) i = yrs.length - 1; return ys[i]; };
 
   return <div className="mapwrap">
@@ -528,12 +533,14 @@ export function ModelMap({ scenario, closed, run, busy = false, expectSec = 12 }
             <div className="tb-fill busy" style={{ width: `${Math.min(elapsed / expectSec, 0.95) * 100}%` }}/></div>
           <output className="small">{elapsed.toFixed(0)} s of about {Math.round(expectSec)} s</output>
         </> : <>
-          <button className="ghost icon" disabled={!wf} onClick={() => { if (tNow >= T_END - 1e-6) setTNow(0); setPlaying(v => !v); }} aria-label={playing ? 'Pause' : 'Play'} title={wf ? (playing ? 'Pause' : 'Play the run') : 'Open the plant to see the currents'}>{playing ? '❚❚' : '▶'}</button>
+          <button className="ghost icon" disabled={!wf} onClick={() => { if (tNow >= T_END - 1e-6) setTNow(0); setPlaying(v => !v); }} aria-label={playing ? 'Pause' : 'Play'} title={wf ? (playing ? 'Pause' : 'Play the run from the moment shown') : 'Run a simulation first'}>{playing ? '❚❚' : '▶'}</button>
           <div className="tb-track">
             <div className="tb-fill" style={{ width: `${(tNow / T_END) * 100}%` }}/>
             <input type="range" min={0} max={T_END} step={0.05} value={tNow} aria-label="Moment shown (years)" disabled={!wf} onChange={e => { setPlaying(false); setTNow(Number(e.target.value)); }}/>
           </div>
-          <output className="small">{wf ? `t = ${tNow.toFixed(1)} of ${T_END.toFixed(1)} yr` : 'open the plant for the currents'}</output>
+          <output className="small">{wf ? `t = ${tNow.toFixed(1)} of ${T_END.toFixed(1)} yr` : run ? 'loading the currents…' : 'run a simulation first'}</output>
+          {wf && !plantOpen && <span className="small tb-hint">open the <b>Plant</b> (+) to see the currents move over its wires</span>}
+          {wfError && <span className="small tb-error" title={wfError}>{/404|Not Found/i.test(wfError) ? 'The server is older than this page: restart start_monetary.cmd to see the currents.' : `Currents not available: ${wfError}`}</span>}
         </>}
       </div>
       <p className="muted note">Click <b>+</b> to open a block: the plant is your drawing, with each agent's circuit under its box; opening a box lifts it (Banks and NFC first show their sub-agents). The wires between the agents are your own. Click a port mark <b>f</b> on a box edge, a wire, the input u, an element or a dashboard tile to plot it. The loop follows the Open / Closed switch on the left.</p>
@@ -657,17 +664,29 @@ export function ModelMap({ scenario, closed, run, busy = false, expectSec = 12 }
 
       {/* the dashboard: the current sources outside the plant boxes, which the plant imports */}
       <section className="dash">
-        <h3>Imported variables <span className="muted small">· current sources drawn outside the plant: the plant reads them, they are not part of its circuit yet · values at the end of the time window</span></h3>
+        <h3>Imported variables <span className="muted small">· current sources drawn outside the plant: the plant reads them, they are not part of its circuit yet · values at the end of the time window · click a tile to open its chart</span></h3>
         {!vals && <p className="muted note">Values appear once a simulation has run.</p>}
         {groups.map(g => <div key={g} className="dash-group">
           <h4>{g}</h4>
           <div className="dash-grid">{dash.filter(d => d.group === g).map(d => {
-            const ser = vals?.series[d.name], v = ser ? { start: at(ser, win[0]), end: at(ser, win[1]) } : undefined, onT = sel?.type === 'el' && sel.id === d.name;
-            return <button key={d.name} className={'dash-tile' + (onT ? ' on' : '')} onClick={() => setSel({ type: 'el', id: d.name })} title={d.expr}>
+            const ser = vals?.series[d.name], v = ser ? { start: at(ser, win[0]), end: at(ser, win[1]) } : undefined, isOpen = dashOpen === d.name;
+            const head = <>
               <span className="dash-name">{pretty(d.ref)}</span>
               <span className="dash-val">{v ? fmt(v.end) : '–'}</span>
               <span className="dash-sub">{v ? `at ${win[1].toFixed(1)} yr · ${win[0].toFixed(1)} yr: ${fmt(v.start)}` : ' '}{d.readers.length ? ` · read by ${d.readers.length}` : ''}</span>
-            </button>;
+            </>;
+            if (!isOpen) return <button key={d.name} className="dash-tile" onClick={() => setDashOpen(d.name)} title={d.expr} aria-expanded={false}>{head}</button>;
+            const w = ser && vals ? inWin(vals.years, ser) : undefined;
+            return <div key={d.name} className="dash-tile open" role="region" aria-label={pretty(d.ref)}>
+              <div className="dash-open-head">
+                <div className="dash-open-title">{head}</div>
+                <button className="pin-close" onClick={() => setDashOpen(undefined)} aria-label={`Close ${pretty(d.ref)}`} title="Close">×</button>
+              </div>
+              <pre className="expr">{d.expr || '—'}</pre>
+              {d.readers.length > 0 && <p className="small">Read by: {d.readers.map(r => `${r.ref}${r.sector ? ` (${blockOfDrawing(r.sector)})` : ''}`).join(', ')}</p>}
+              {w ? <Chart title={pretty(d.ref)} unit="value" height={200} group={null} markers={nowMark} lines={[{ name: pretty(d.ref), x: w.x, y: w.y, color: t.inflation }]}/>
+                : <p className="muted note">The chart appears once a simulation has run.</p>}
+            </div>;
           })}</div>
         </div>)}
       </section>
@@ -685,7 +704,7 @@ export function ModelMap({ scenario, closed, run, busy = false, expectSec = 12 }
               ? <>The flow through the port: the current through <code>{portSel.carriers[0].name}</code>{portSel.carriers.length > 1 ? ` (and ${portSel.carriers.length - 1} more on this node)` : ''}.</>
               : <>The effort: the voltage of node <code>{portSel.node}</code> against ground.</>}</p>
             {traceBusy ? <p className="muted note">Simulating the current scenario…</p>
-              : trace ? <Chart title={trace.trace} unit={sel?.q === 'f' ? 'flow per time unit' : 'effort (node voltage)'} height={220} group={null} lines={[{ name: trace.trace, x: wTrace!.x, y: wTrace!.y, color: colorOf(plantDraw?.hub[portSel.node] ?? '') }]}/>
+              : trace ? <Chart title={trace.trace} unit={sel?.q === 'f' ? 'flow per time unit' : 'effort (node voltage)'} height={220} group={null} markers={nowMark} lines={[{ name: trace.trace, x: wTrace!.x, y: wTrace!.y, color: colorOf(plantDraw?.hub[portSel.node] ?? '') }]}/>
               : <p className="muted note">No trace.</p>}
             <h3 className="mt">On this node</h3>
             <ul className="conn">{portSel.onNode.map(e => <li key={e.name}><button className="link-btn" onClick={() => setSel({ type: 'el', id: e.name })}>{e.ref}</button>
@@ -702,7 +721,7 @@ export function ModelMap({ scenario, closed, run, busy = false, expectSec = 12 }
           <pre className="expr">{el.expr || '—'}</pre>
           {dashOf(el.name)?.readers.length ? <p className="small">Read by: {dashOf(el.name)!.readers.map(r => `${r.ref}${r.sector ? ` (${blockOfDrawing(r.sector)})` : ''}`).join(', ')}</p> : null}
           {traceBusy ? <p className="muted note">Simulating the current scenario for this trace…</p>
-            : trace ? <Chart title={trace.trace} unit={el.kind === 'inductor' || el.kind.includes('current') ? 'current (flow)' : 'value'} height={220} group={null}
+            : trace ? <Chart title={trace.trace} unit={el.kind === 'inductor' || el.kind.includes('current') ? 'current (flow)' : 'value'} height={220} group={null} markers={nowMark}
                 lines={[{ name: trace.trace, x: wTrace!.x, y: wTrace!.y, color: KIND[el.kind] ?? t.inflation }]}/>
             : <p className="muted note">No trace for this element.</p>}
         </> : selBlock ? <>
