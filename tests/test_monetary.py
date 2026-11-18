@@ -240,3 +240,31 @@ def test_steady_closed_asc_with_a_new_ki(tmp_path):
     text = out.read_text(encoding="utf-8")
     assert text.count("Ki=0.04") == 1 and "Ki=0.44" not in text
     assert text.count("tau_Dfilt=") == 1 and "/tau_Dfilt" in text and "SYMATTR InstName PI_D" in text
+
+
+# ---------------------------------------------------------------- current along the drawn wires (moving dots)
+from monetary import wireflow
+
+
+def test_wire_currents_follow_the_elements_and_balance():
+    """Every non-ground wire gets a current; where a wire ends at a single pin, the current away from the pin is what
+    the element pushes into the node; in every node the currents entering through the pins add up to zero."""
+    s = Scenario()
+    r = wireflow.wire_currents(s)
+    m = schematic.model_map()
+    assert {sg["w"] for sg in r["segments"]} == {i for i, n in enumerate(m["wire_nodes"]) if n and n != "0"}
+    topo = wireflow.topology()
+    traces = wireflow.recent_traces(s); low = {k.lower(): k for k in traces}
+    t = np.array(r["years"]) * 120
+    inj = lambda el: np.interp(t, traces["time"], traces[low[f"i({el.split('§')[-1].lower()})"]])
+    ends = defaultdict(list)
+    for k, sg in enumerate(r["segments"]):
+        ends[tuple(sg["p"][:2])].append((k, +1)); ends[tuple(sg["p"][2:])].append((k, -1))
+    checked = 0
+    for p, pins in topo["pins"].items():
+        if len(ends.get(p, [])) == 1:
+            k, sgn = ends[p][0]
+            pushed = sum(sign * inj(el) for el, sign in pins)
+            assert np.allclose(sgn * np.array(r["segments"][k]["i"]), pushed, rtol=2e-3, atol=1e-7 + 2e-3 * np.abs(pushed).max())
+            checked += 1
+    assert checked > 50

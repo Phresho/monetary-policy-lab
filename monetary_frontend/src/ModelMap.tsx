@@ -153,7 +153,12 @@ const T_END = 13.33;
 type Sel = { type: 'block' | 'port' | 'node' | 'el' | 'instr'; id: string; q?: 'e' | 'f' };
 const fmt = (v: number) => !isFinite(v) ? '–' : Math.abs(v) >= 100 ? v.toFixed(1) : Math.abs(v) >= 1 ? v.toFixed(3) : v.toPrecision(3);
 
-export function ModelMap({ scenario, closed, run }: { scenario: unknown; closed: boolean; run?: SavedRun }) {
+// current along the drawn wires (POST /api/wireflow), positive in a segment's drawn direction
+type WireFlow = { years: number[]; segments: { w: number; p: number[]; node: string; i: number[] }[] };
+const PLAY_SECONDS = 20;   // playing the whole run (13.3 years) takes this long
+const DOT_PERIODS = [100, 200, 400, 800, 1600];   // dot spacing in drawing units; one is picked for about 30 screen pixels
+
+export function ModelMap({ scenario, closed, run, busy = false, expectSec = 12 }: { scenario: unknown; closed: boolean; run?: SavedRun; busy?: boolean; expectSec?: number }) {
   const t = useTheme();
   const KIND = kindColor(t);
   const [m, setM] = useState<MapData>();
@@ -163,6 +168,10 @@ export function ModelMap({ scenario, closed, run }: { scenario: unknown; closed:
   const [open, setOpen] = useState<string[]>([]);       // every opened block (several agents can be open)
   const [focus, setFocus] = useState<string>();          // the block toggled last: the camera and the breadcrumbs follow it
   const [win, setWin] = useState<[number, number]>([0, 13.33]);   // time window (years) for the plots and the dashboard
+  const [wf, setWf] = useState<WireFlow>();       // currents along the wires of the active run
+  const [tNow, setTNow] = useState(0);            // the moment shown by the dots and the time bar (years)
+  const [playing, setPlaying] = useState(false);
+  const [elapsed, setElapsed] = useState(0);      // seconds since the running simulation started
   const [whole, setWhole] = useState(false);
   const [sel, setSel] = useState<Sel>();
   const [hover, setHover] = useState<string>();
@@ -194,6 +203,40 @@ export function ModelMap({ scenario, closed, run }: { scenario: unknown; closed:
   }, [rects]);
 
   const plantOpen = open.includes(PLANT);
+
+  // ---------------------------------------------------------------- time: playback and the running simulation
+  // the wires' currents of the active run, fetched once the plant is open; a new run plays from the start
+  const scenarioKey = JSON.stringify(scenario);
+  useEffect(() => {
+    if (!plantOpen || busy) return;
+    let live = true;
+    api<WireFlow>('/wireflow', scenario).then(r => { if (live) { setWf(r); setTNow(0); setPlaying(true); } }).catch(() => undefined);
+    return () => { live = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [plantOpen, scenarioKey, busy]);
+  useEffect(() => {   // playback: T_END years in PLAY_SECONDS
+    if (!playing) return;
+    let raf = 0, last = performance.now();
+    const step = (now: number) => {
+      const dt = (now - last) / 1000; last = now;
+      setTNow(v => { const n = v + dt * T_END / PLAY_SECONDS; if (n >= T_END) { setPlaying(false); return T_END; } return n; });
+      raf = requestAnimationFrame(step);
+    };
+    raf = requestAnimationFrame(step);
+    return () => cancelAnimationFrame(raf);
+  }, [playing]);
+  useEffect(() => {   // while a simulation runs: seconds elapsed, for the progress estimate
+    if (!busy) { setElapsed(0); return; }
+    const t0 = performance.now(), id = window.setInterval(() => setElapsed((performance.now() - t0) / 1000), 200);
+    return () => window.clearInterval(id);
+  }, [busy]);
+  // a typical current (95th percentile over wires and time) sets the dots' speed scale
+  const iRef = useMemo(() => {
+    if (!wf) return 1;
+    const all = wf.segments.flatMap(sg => sg.i.map(Math.abs)).filter(v => v > 0).sort((a, b) => a - b);
+    return all[Math.floor(all.length * 0.95)] || 1;
+  }, [wf]);
+  const ti = wf ? Math.min(wf.years.length - 1, Math.round(tNow / (wf.years[1] - wf.years[0]))) : 0;   // dots change per sample
   const geo = useMemo(() => m && rects.Households ? makeGeo(plantView(m, rects, inPlant)) : GEO0, [m, rects]);
   const layoutFor = useCallback((o: string[]) => ({ boxes: o.includes(PLANT)
     ? { [PLANT]: geo.P_OPEN, ...Object.fromEntries(Object.entries(rects).filter(([k]) => inPlant(k)).map(([k, r]) => [k, geo.mapRect(r)])) } as Record<string, Box>
@@ -478,6 +521,21 @@ export function ModelMap({ scenario, closed, run }: { scenario: unknown; closed:
           <button className="ghost" onClick={() => whole ? showWhole(true) : flyTo(view(focusBoxOf(open.includes(PLANT) ? PLANT : undefined, open), 0.03))} title="Show everything">Fit</button>
         </div>
       </div>
+      <div className="timebar" role="group" aria-label="Simulation time">
+        {busy ? <>
+          <span className="small tb-label">Simulating…</span>
+          <div className="tb-track" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(Math.min(elapsed / expectSec, 0.95) * 100)}>
+            <div className="tb-fill busy" style={{ width: `${Math.min(elapsed / expectSec, 0.95) * 100}%` }}/></div>
+          <output className="small">{elapsed.toFixed(0)} s of about {Math.round(expectSec)} s</output>
+        </> : <>
+          <button className="ghost icon" disabled={!wf} onClick={() => { if (tNow >= T_END - 1e-6) setTNow(0); setPlaying(v => !v); }} aria-label={playing ? 'Pause' : 'Play'} title={wf ? (playing ? 'Pause' : 'Play the run') : 'Open the plant to see the currents'}>{playing ? '❚❚' : '▶'}</button>
+          <div className="tb-track">
+            <div className="tb-fill" style={{ width: `${(tNow / T_END) * 100}%` }}/>
+            <input type="range" min={0} max={T_END} step={0.05} value={tNow} aria-label="Moment shown (years)" disabled={!wf} onChange={e => { setPlaying(false); setTNow(Number(e.target.value)); }}/>
+          </div>
+          <output className="small">{wf ? `t = ${tNow.toFixed(1)} of ${T_END.toFixed(1)} yr` : 'open the plant for the currents'}</output>
+        </>}
+      </div>
       <p className="muted note">Click <b>+</b> to open a block: the plant is your drawing, with each agent's circuit under its box; opening a box lifts it (Banks and NFC first show their sub-agents). The wires between the agents are your own. Click a port mark <b>f</b> on a box edge, a wire, the input u, an element or a dashboard tile to plot it. The loop follows the Open / Closed switch on the left.</p>
       <svg ref={svg} className="schem blockmap" viewBox={vb.join(' ')} preserveAspectRatio="xMidYMid meet" role="img" aria-label="Circuit map"
         onPointerDown={e => { if (e.button === 0) drag.current = { x: e.clientX, y: e.clientY, vb, moved: false }; }}
@@ -542,7 +600,7 @@ export function ModelMap({ scenario, closed, run }: { scenario: unknown; closed:
           {/* the plant block, then its circuit as drawn, then the plant's boxes (closed ones cover their part), then the ports */}
           {shownBlocks.filter(id => !inPlant(id) && id !== loopLeaf).map(block)}
           {plantDraw && <svg x={geo.P_OPEN.x} y={geo.P_OPEN.y + HEAD} width={geo.VIEW.w * K} height={geo.VIEW.h * K} viewBox={`${geo.VIEW.x} ${geo.VIEW.y} ${geo.VIEW.w} ${geo.VIEW.h}`} className="plant-drawing">
-            {plantDraw.texts.map((x, i) => <text key={i} x={x.x} y={x.y} className="asctext halo" fontSize={Math.max(10 + x.size * 9, 9 * px / K)} textAnchor={x.align.endsWith('Right') ? 'end' : 'start'} dominantBaseline="middle"
+            {plantDraw.texts.filter(x => (10 + x.size * 9) * 1.4 * K / px >= 4).map((x, i) => <text key={i} x={x.x} y={x.y} className="asctext halo" fontSize={(10 + x.size * 9) * 1.4} textAnchor={x.align.endsWith('Right') ? 'end' : 'start'} dominantBaseline="middle"
               transform={x.align.startsWith('V') ? `rotate(-90 ${x.x} ${x.y})` : undefined}>{x.text}</text>)}
             {plantDraw.wires.map(({ w, i, node }) => {
               const hubA = node ? plantDraw.hub[node] : undefined, c = hubA ? colorOf(hubA) : undefined, ground = node === '0';
@@ -552,8 +610,23 @@ export function ModelMap({ scenario, closed, run }: { scenario: unknown; closed:
                 <line x1={w[0]} y1={w[1]} x2={w[2]} y2={w[3]} style={c ? { stroke: c } : undefined}/>
               </g>;
             })}
+            {wf && (() => {
+              // moving dots: direction = sign of the current at the shown moment, speed grows with its size
+              const shownW = new Set(plantDraw.wires.map(x => x.i)), unit = px / K;   // drawing units per screen pixel
+              const period = DOT_PERIODS.find(q => q / unit >= 26) ?? DOT_PERIODS[DOT_PERIODS.length - 1];
+              const dot = 7 * unit;   // about 7 screen pixels at every zoom
+              return <g className="flow-dots-layer" aria-hidden="true">{wf.segments.map((sg, k) => {
+                if (!shownW.has(sg.w)) return null;
+                const v = sg.i[ti] ?? 0, a = Math.abs(v) / iRef;
+                if (a < 2e-3) return null;
+                const hubA = plantDraw.hub[sg.node], c = hubA ? colorOf(hubA) : t.ink2;
+                const dur = 2.6 / (0.25 + 1.75 * Math.sqrt(Math.min(a, 4)));
+                return <line key={k} x1={sg.p[0]} y1={sg.p[1]} x2={sg.p[2]} y2={sg.p[3]} className={`flow-dots p${period}`}
+                  style={{ stroke: c, strokeWidth: dot, strokeDasharray: `0 ${period}`, animationDuration: `${dur.toFixed(2)}s`, animationDirection: v > 0 ? 'normal' : 'reverse' }}/>;
+              })}</g>;
+            })()}
             {plantDraw.flags.map((f, i) => f.ground ? <path key={i} className="gnd" d={`M${f.x} ${f.y} v14 m-22 0 h44 m-32 10 h20 m-10 10 h0`}/>
-              : <text key={i} x={f.x + 8} y={f.y - 10} className="flag" fontSize={Math.min(Math.max(10 * px / K, 20), 300)}>{f.name}</text>)}
+              : 40 * K / px >= 4 && <text key={i} x={f.x + 8} y={f.y - 10} className="flag" fontSize={40}>{f.name}</text>)}
             {plantDraw.els.map(e => {
               const cx = (e.pins[0][0] + e.pins[1][0]) / 2, cy = (e.pins[0][1] + e.pins[1][1]) / 2, onE = sel?.type === 'el' && sel.id === e.name;
               return <g key={e.name} data-el={e.name} className={'el' + (onE ? ' sel' : '')}>

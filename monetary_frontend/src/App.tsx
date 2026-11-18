@@ -136,7 +136,7 @@ export default function App() {
           <button role="tab" aria-selected={tab === 'flows'} className={tab === 'flows' ? 'active' : ''} onClick={() => setTab('flows')}>Sector flows</button>
         </div>
         {error && <p className="notice bad">{error}</p>}
-        {tab === 'map' ? <ModelMap scenario={run?.scenario ?? s} closed={run?.scenario.closed ?? s.closed} run={run}/>
+        {tab === 'map' ? <ModelMap scenario={run?.scenario ?? s} closed={run?.scenario.closed ?? s.closed} run={run} busy={busy} expectSec={run?.seconds ?? 12}/>
           : tab === 'flows' ? (run ? <FlowsView scenario={run.scenario}/> : <div className="panel empty"><p className="muted">Run a simulation first.</p></div>)
           : tab === 'freq' ? <Analysis a={an} busy={anBusy} tOp={tOp} setTOp={setTOp} closedMode={s.closed} scenario={s} onPick={(ki, kd) => set({ ki, kd, closed: true })}/>
           : !run ? <div className="panel empty"><p className="muted">{busy ? 'Running the first simulation…' : 'No run yet.'}</p></div> : <>

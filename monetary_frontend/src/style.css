@@ -190,3 +190,17 @@ table.data td.small { font-size:12px; color:var(--ink2); white-space:normal; }
 .schem .plant-title { font-weight:700; paint-order:stroke; stroke:var(--surface); stroke-width:4px; stroke-linejoin:round; }
 .schem .asctext.halo { paint-order:stroke; stroke:var(--surface); stroke-width:3px; stroke-linejoin:round; }
 .win { display:flex; align-items:center; gap:6px; } .win input[type=range] { width:110px; accent-color:var(--blue); } .win output { min-width:86px; font-variant-numeric:tabular-nums; }
+
+/* time bar of the circuit map: playback of the run, or the progress of the running simulation */
+.timebar { display:flex; align-items:center; gap:10px; margin:6px 0 4px; }
+.tb-track { position:relative; flex:1; height:10px; border-radius:99px; background:var(--bg); border:1px solid var(--line); }
+.tb-fill { position:absolute; left:0; top:0; bottom:0; border-radius:99px; background:var(--blue); opacity:.85; pointer-events:none; }
+.tb-fill.busy { background:repeating-linear-gradient(45deg, var(--blue) 0 10px, color-mix(in srgb, var(--blue) 70%, white) 10px 20px); transition:width .2s linear; }
+.tb-track input[type=range] { position:absolute; inset:-6px 0; width:100%; margin:0; opacity:0; cursor:pointer; }
+.timebar output { min-width:150px; font-variant-numeric:tabular-nums; color:var(--muted); } .tb-label { color:var(--ink2); font-weight:600; }
+/* moving dots along the wires: one dash period per loop, so the motion is seamless */
+.schem .flow-dots { fill:none; stroke-linecap:round; pointer-events:none; animation-name:dots200; animation-timing-function:linear; animation-iteration-count:infinite; opacity:.9; }
+.schem .flow-dots.p100 { animation-name:dots100; } .schem .flow-dots.p400 { animation-name:dots400; } .schem .flow-dots.p800 { animation-name:dots800; } .schem .flow-dots.p1600 { animation-name:dots1600; }
+@keyframes dots100 { to { stroke-dashoffset:-100; } } @keyframes dots200 { to { stroke-dashoffset:-200; } } @keyframes dots400 { to { stroke-dashoffset:-400; } }
+@keyframes dots800 { to { stroke-dashoffset:-800; } } @keyframes dots1600 { to { stroke-dashoffset:-1600; } }
+@media (prefers-reduced-motion: reduce) { .schem .flow-dots { animation:none; } }

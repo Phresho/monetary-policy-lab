@@ -107,6 +107,16 @@ def create_app() -> FastAPI:
             except (RuntimeError, ValueError, OSError) as error:
                 raise HTTPException(422, f"Simulation failed: {error}") from error
 
+    @app.post("/api/wireflow")
+    def wireflow(scenario: Scenario):
+        """Current along every drawn (non-ground) wire over time, for the moving dots on the circuit map."""
+        from . import wireflow as wf
+        with SLOTS:
+            try:
+                return wf.wire_currents(scenario)
+            except (RuntimeError, ValueError, OSError) as error:
+                raise HTTPException(422, f"Simulation failed: {error}") from error
+
     @app.post("/api/sweep")
     def sweep(request: SweepRequest):
         from . import frequency
