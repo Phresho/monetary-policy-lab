@@ -1,0 +1,50 @@
+# Monetary Policy Lab
+
+Monetary policy as a control loop: the central bank's interest-rate rule against a stock-flow model of the economy
+with a central bank, banks, households, firms, government and a foreign sector. The model is an LTspice circuit
+(`model/Model_Bank_20261111_bank_cleaned up.net`, drawn in `Model_Bank_20261111_bank_cleaned up.asc`) and runs on
+ngspice. The web app shows it as a circuit map, with simulation, frequency analysis and sector flows.
+
+Live (once hosted): `https://economicsystemsandcontrol.com/monetary/`. Hosting on the VM: `README_MONETARY_DEPLOY.md`.
+
+## Run (Windows)
+First time:
+```
+py -3.12 -m venv .venv
+.venv\Scripts\python -m pip install -r backend\requirements.txt
+cd monetary_frontend && npm install && npm run build
+```
+The ngspice DLL is taken from `tools/ngspice/Spice64_dll/` (git-ignored) unless `NGSPICE_LIBRARY_PATH` is set. To get it
+(PowerShell, repository root):
+```
+curl.exe -fsSL -o ngspice.7z https://sourceforge.net/projects/ngspice/files/ng-spice-rework/old-releases/45.2/ngspice-45.2_dll_64.7z/download
+(Get-FileHash -Algorithm SHA256 ngspice.7z).Hash   # FF110EBB04367EB37FF3C88C75AB3BEA1B2191C11EFCE78F264C2CA73034762B
+7z x ngspice.7z -otools\ngspice                    # gives tools\ngspice\Spice64_dll\...
+```
+Then `start_monetary.cmd` opens http://127.0.0.1:8010 (`backend/run_monetary.py --port 8010`).
+`MONETARY_NGSPICE_TIMEOUT` (default 120 s) stops a hanging run.
+
+After front-end edits: `cd monetary_frontend && npm run build`. After Python edits: restart.
+
+## Check
+`.venv\Scripts\python -m pytest -q tests/test_monetary.py` (must pass, not skip: skips mean the DLL was not found) and
+`cd monetary_frontend && npx tsc --noEmit`. The same tests run in GitHub Actions (`.github/workflows/windows-ngspice.yml`,
+Windows with the official ngspice 45.2 DLL).
+
+## How it works
+- `backend/monetary/netlist.py`: run netlists from the unchanged model file; every option replaces exact, asserted lines (open loop: the rate source `B§R`; closed loop: the policy rule `B_PI`).
+- `ngspice.py`: LTspice syntax to ngspice, runs through the shared DLL in a background thread with a timeout; AC analysis and integrator states for the frequency analysis. `ltspice.py` is the reference solver.
+- Policy rule gains: the app starts from Kp 0.06, **Ki 0.04**, Kd 1.5 (filtered derivative). The netlist's Ki = 0.44 makes the closed loop oscillate (unstable, inflation std 3.6 points in ngspice and in LTspice); this is not the derivative term: without it (Kd = 0) the oscillation is larger (std 6.2). With Ki 0.04 the loop is stable, phase margin about 50 deg, Ms 1.55. The netlist values stay as the slider hints. `model/Model_Bank_20261111_bank_cleaned up_steady_closed.asc` is the steady-start closed-loop drawing with Ki 0.04 (`python -m monetary.asc --closed --ki 0.04` from `backend/`), `..._cleaned up_steady.asc` the open-loop one.
+- `steady.py`: steady-state start. The forcing `.ic` lines are removed, the operating point settles the fast part and a root finder sets the free integrators so their inputs are zero; stocks (capital, debt, wage index) keep their start values. Without it the netlist's own start makes inflation spike in the first months.
+- `scenario.py`: scenario inputs (open-loop rate path, rule gains Kp/Ki/Kd, derivative filter, R*, target, start time), output series and metrics. 120 model time units = 1 year (from the /120 in the interest flows).
+- `frequency.py`: plant rate -> inflation from ngspice's AC analysis, linearised at the steady state or a chosen year; loop, margins, Ms, Nyquist, S/T, plant poles by vector fitting, closed-loop poles and linear step response.
+- `schematic.py`: parses the `.asc`, rebuilds the nets from the drawing, checks them against the netlist (53 nodes) and gives each element its sector and the links between sectors.
+- `flows.py`: flows between sectors. At every node shared by two or more sectors, the current each sector's elements push in (I(x) enters the element's second node) is summed per sector; these sums add up to zero (Kirchhoff, tested). Goods, labour and money nodes are mixed, so the page shows them per node.
+- `frequency.sweep`: robustness map over Ki × Kd at the current Kp (Ms, phase margin, linear verdict per cell) from the cached plant and fit, without extra simulations. In closed loop at a later year the plant itself depends on Ki and Kd; the map then keeps the current plant (flagged `approx`).
+- `wireflow.py`: the current along every drawn wire (a tree per node from the drawing; exact at the element pins, balanced per node), for the dots on the circuit map.
+- `server.py`: FastAPI (`/api/catalogue`, `/api/runs`, `/api/analysis`, `/api/sweep`, `/api/flows`, `/api/wireflow`, `/api/model/map`, `/api/trace`), serves `monetary_frontend/dist`.
+- `monetary_frontend/`: React + Plotly with four tabs. Circuit map (the start page, `ModelMap.tsx`): layers that unfold in place: the policy loop (central bank → interest rates → economy → CPI values → back, shock), the economy opened into its sectors with the flows and signals between them, and any block opened to its own circuit from the `.asc` drawing (click an element for its equation and trace). Layers 0 and 1 are laid out by hand (`TOP`, `INNER`); layer 2 is the drawing. Wheel/pinch zoom (native non-passive listener), drag, zoom buttons, Fit, breadcrumbs, 'Whole circuit'. A time bar sets the moment shown: dots on the plant's wires sit where the charge that has passed puts them (as in Falstad's circuit simulator), so they move forward and back with the slider; imported variables open their chart inside their tile. Then Simulation (KPI tiles with sparkline and delta, inflation gap with ±1 pt band, rates along the chain, transmission small multiples with a "compare sizes" index mode, balance sheets, run library with compare), Frequency analysis (robustness map, Bode, Nyquist, S/T, poles, step), Sector flows (Sankey per year, node table, node over time) and Model map.
+
+## Charts
+Colours live in `monetary_frontend/src/viz.ts` and follow the quantity, not the chart: inflation blue, rates orange, real economy aqua; the four rates are one orange ramp from the policy rate outwards; reference lines (target, Φ) are ink; compared runs grey dashed; red/green only for the stability verdict, always with ✓/✕. The sets were checked with the dataviz skill's `validate_palette.js` (categorical: all pairs, light and dark; ramps: `--ordinal`); re-run it when a colour changes. Light and dark themes follow the OS or the Theme selector. Every chart has Table and CSV; time charts share a crosshair.
+

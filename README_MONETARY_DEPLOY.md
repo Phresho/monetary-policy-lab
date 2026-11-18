@@ -1,163 +1,109 @@
-# Monetary Policy Lab: merging and hosting it next to the Housing Lab
+# Monetary Policy Lab: hosting it on the VM under `/monetary/`
 
-For Jesse. This explains how to merge Friso's branch `FrisoMonetary2` and run the Monetary Policy Lab on the Azure VM
-as a third site under `/monetary/`, with its own tile on the landing page, next to DynaBI and the Housing Lab.
+For Jesse and Friso. The Monetary Policy Lab is its own repository (`Phresho/monetary-policy-lab`) and its own
+service on the Azure VM, next to the other apps behind the one Caddy server (`DTOSim-Caddy`, config
+`C:\DTOSim\deploy\Caddyfile`). Nothing here touches the Housing repo, the Housing service or its files.
 
-**What the branch changes.** It adds a separate app: `backend/monetary/`, `backend/run_monetary.py`,
-`monetary_frontend/`, `start_monetary.cmd`, the model `model/Model_Bank_20261111_bank_cleaned up.net/.asc`, and
-`tests/test_monetary.py`. It also extends `README.md` and `.gitignore`. Nothing else changes: `frontend/`,
-`backend/housing/`, `backend/run.py`, `ci/` and `.github/` are the same as on `main`, so the Housing Lab and its
-service keep running as they are. The two apps share `backend/requirements.txt`, which gets no new packages.
-
-## 1. Merge
-
-- `FrisoMonetary2` starts at `main` (`d2599e5`), so the merge is a fast-forward without conflicts.
-- Open the pull request from Friso's fork: https://github.com/Phresho/housing_policy_design/pull/new/FrisoMonetary2
-  (base: `jessedeklerk2000-creator/housing_policy_design` `main`).
-- The `windows-ngspice` workflow runs on the PR. Its `pytest` step also runs `tests/test_monetary.py` (21 tests,
-  about 2 minutes). These tests need only ngspice, not LTspice, and skip themselves when the ngspice DLL is missing.
-
-## 2. Install on the VM (PowerShell, repository root)
-
-The steps below use the Python and ngspice DLL that the Housing service already uses.
-
-```powershell
-git pull                                              # main, after the merge
-python -m pip install -r backend/requirements.txt     # no new packages; safe to run
-
-# the same ngspice 45.2 DLL as the Housing service (README, "Windows")
-$env:NGSPICE_LIBRARY_PATH = "C:\ngspice\Spice64_dll\dll-vs\ngspice.dll"
-$env:SPICE_LIB_DIR        = "C:\ngspice\Spice64_dll\share\ngspice"
-python -m pytest -q tests/test_monetary.py            # must pass, not skip (skips mean the DLL was not found)
-
-cd monetary_frontend
-npm ci
-npm run build                                         # writes monetary_frontend/dist (git-ignored, so build it on the VM)
-cd ..
-```
-
-There is no `--base` flag for this build. The front end uses only relative paths: `base: './'` in
-`monetary_frontend/vite.config.ts`, and API calls go to `fetch('api' + path)`. So the same build works at `/`, at
-`/monetary/`, or at any other path.
-
-## 3. Run it as a Windows service
-
-The server:
-
-```powershell
-python backend/run_monetary.py --port 8003            # listens on 127.0.0.1 only
-```
-
-| Port | Site |
-|---|---|
-| 8001 | DynaBI |
-| 8002 | Housing Lab (`/housing/`) |
-| **8003** | **Monetary Policy Lab (`/monetary/`)**: a suggestion, any free port works |
-
-Environment variables for the service:
-
-| Variable | Value | Needed |
+| Port | App | Path |
 |---|---|---|
-| `NGSPICE_LIBRARY_PATH` | `C:\ngspice\Spice64_dll\dll-vs\ngspice.dll` | yes |
-| `SPICE_LIB_DIR` | `C:\ngspice\Spice64_dll\share\ngspice` | yes |
-| `MONETARY_NGSPICE_TIMEOUT` | seconds before a stuck run is stopped (default `120`) | no |
+| 8000 | DTOSim | `/` on the Azure address |
+| 8001 | DynamicBI | `/dynabi/` |
+| 8002 | Housing Policy Lab | `/housing/` |
+| **8003** | **Monetary Policy Lab** | **`/monetary/`** |
 
-Set up the service with the same tool you used for the Housing service. If that is NSSM, for example:
+## 1. Install (PowerShell)
 
 ```powershell
-nssm install MonetaryLab "C:\path\to\python.exe" "backend\run_monetary.py --port 8003"
-nssm set MonetaryLab AppDirectory "C:\path\to\housing_policy_design"
+cd C:\
+git clone https://github.com/Phresho/monetary-policy-lab.git
+cd C:\monetary-policy-lab
+python -m venv .venv
+.venv\Scripts\python -m pip install -r backend\requirements.txt
+
+$env:NGSPICE_LIBRARY_PATH = "C:\ngspice\Spice64_dll\dll-vs\ngspice.dll"   # the DLL the Housing service already uses
+$env:SPICE_LIB_DIR        = "C:\ngspice\Spice64_dll\share\ngspice"
+.venv\Scripts\python -m pytest -q tests\test_monetary.py                   # must pass, not skip
+
+cd monetary_frontend; npm ci; npm run build; cd ..
+```
+
+Check the DLL paths on the VM first. The Housing service and this one each load the DLL in their own process, so
+they do not share ngspice's lock.
+
+There is no `--base` flag for the build. The front end uses only relative paths (`base: './'` in
+`monetary_frontend/vite.config.ts`, API calls to `fetch('api' + path)`), so the same build works at `/` and at
+`/monetary/`.
+
+## 2. Service (NSSM, as for the other services)
+
+```powershell
+nssm install MonetaryLab "C:\monetary-policy-lab\.venv\Scripts\python.exe" "backend\run_monetary.py --port 8003"
+nssm set MonetaryLab AppDirectory "C:\monetary-policy-lab"
 nssm set MonetaryLab AppEnvironmentExtra NGSPICE_LIBRARY_PATH=C:\ngspice\Spice64_dll\dll-vs\ngspice.dll SPICE_LIB_DIR=C:\ngspice\Spice64_dll\share\ngspice
 nssm start MonetaryLab
 ```
 
-Check it on the VM: `http://127.0.0.1:8003/api/catalogue` returns JSON with `"solver": "ngspice"`.
-`"solver": null` means the DLL was not found.
+The server listens on 127.0.0.1 only. Optional: `MONETARY_NGSPICE_TIMEOUT` (seconds before a stuck run is stopped,
+default 120).
 
-## 4. Route `/monetary/` to it
+Check on the VM: `http://127.0.0.1:8003/api/catalogue` returns JSON with `"solver": "ngspice"` (`null` means the DLL
+was not found).
 
-Add a route next to the existing `/housing/` one, in whatever the VM uses for that (IIS, Caddy, nginx). It needs:
+## 3. Caddy route (Jesse)
 
-1. **`/monetary/…` → `http://127.0.0.1:8003/…`, with the `/monetary` prefix stripped.** The app serves its page at
-   `/`, its files at `/assets/…` and its API at `/api/…`.
-2. **A redirect from `/monetary` to `/monetary/`, with the trailing slash.** Without the slash, the relative URLs
-   resolve to `/assets/…` and `/api/…` on the site root, so the page stays blank.
-3. **A long proxy timeout.** The first run of a scenario takes 10–15 s, and a frequency analysis at a new Kp takes
-   15–40 s. Allow about 120 s.
-
-Examples (pick the one that matches the VM):
-
-```xml
-<!-- IIS (URL Rewrite + ARR), web.config of the site root -->
-<rule name="monetary-slash" stopProcessing="true">
-  <match url="^monetary$" />
-  <action type="Redirect" url="monetary/" redirectType="Permanent" />
-</rule>
-<rule name="monetary" stopProcessing="true">
-  <match url="^monetary/(.*)" />
-  <action type="Rewrite" url="http://127.0.0.1:8003/{R:1}" />
-</rule>
-```
+In the site block of the Caddyfile, next to the `/housing/` route:
 
 ```
-# Caddy
+# Monetary Policy Lab (Friso, own repository, service MonetaryLab on 127.0.0.1:8003)
 redir /monetary /monetary/
 handle_path /monetary/* {
     reverse_proxy 127.0.0.1:8003
 }
 ```
 
-```nginx
-# nginx
-location = /monetary { return 301 /monetary/; }
-location /monetary/ {
-    proxy_pass http://127.0.0.1:8003/;
-    proxy_read_timeout 120s;
-}
-```
+Then validate and reload Caddy. `handle_path` strips the `/monetary` prefix: the app serves its page at `/`, its
+files at `/assets/…` and its API at `/api/…`. The redirect to the trailing slash matters: without it the relative
+URLs resolve on the site root and the page stays blank. Caddy sets no response timeout by default, so runs of
+15–40 s get through. `/monetary/api/...` goes to this app, not to DynaBI's `/api/`, because the `/monetary/` prefix
+is matched first.
 
-Friso tested exactly this set-up locally: a proxy that strips `/monetary` in front of `run_monetary.py`. Opening
-`/monetary` redirected to `/monetary/`, the circuit map loaded, a simulation ran and all 14 charts drew, with no
-failed requests.
+Tested locally: a proxy that strips `/monetary` in front of `run_monetary.py`. `/monetary` redirected to
+`/monetary/`, the circuit map loaded, a simulation ran and all charts drew, with no failed requests.
 
-## 5. The tile on the landing page
+## 4. Landing page (Jesse)
 
-Add a tile next to the DynaBI and Housing tiles:
+A Monetary card on `economicsystemsandcontrol.com`, in the same style as Housing and Energy: sector name, the
+problems in two short bullets, and an "Open the platform" button to `/monetary/`.
 
-- **Title:** Monetary Policy Lab
-- **Link:** `/monetary/`
-- **Text:** Monetary policy as a control loop: the ECB's rule against a stock-flow model of the euro-area economy (an LTspice circuit), with the circuit map, simulation, frequency analysis and sector flows.
+- **Sector:** Monetary policy
+- **Problems:** (Friso sends these two lines)
+- **Button:** Open the platform → `/monetary/`
 
-## 6. Check after deploying
+## 5. Check after deploying
 
-- `https://<site>/monetary` redirects to `/monetary/` and opens the **Circuit map**, the start page.
-- **Simulation tab:** the first run starts by itself and takes 10–15 s. The charts and KPI tiles fill.
+- `https://economicsystemsandcontrol.com/monetary` redirects to `/monetary/` and opens the **Circuit map**.
+- **Simulation tab:** the first run starts by itself and takes 10–15 s; the charts and KPI tiles fill.
 - **Frequency analysis:** the first analysis takes up to about 40 s, and the robustness map appears.
-- `https://<site>/monetary/api/catalogue` shows `"solver": "ngspice"`.
+- `https://economicsystemsandcontrol.com/monetary/api/catalogue` shows `"solver": "ngspice"`.
 
-## 7. Updating later
+## 6. Updating later
 
-Same routine as the Housing Lab:
-
-1. `git pull`.
-2. If `backend/` or `backend/requirements.txt` changed: `pip install -r backend/requirements.txt` and
-   `pytest -q tests/test_monetary.py`.
-3. If `monetary_frontend/` changed: `cd monetary_frontend && npm ci && npm run build`.
-4. Restart the `MonetaryLab` service. Only backend changes need a restart; the page picks up a new build when it
-   is refreshed.
+1. `git pull` in `C:\monetary-policy-lab`.
+2. Backend changed: `.venv\Scripts\python -m pip install -r backend\requirements.txt` and the tests.
+3. Front end changed: `cd monetary_frontend; npm ci; npm run build`.
+4. `nssm restart MonetaryLab` (backend changes only; a new front-end build is picked up on refresh).
 
 ## Good to know
 
 - **Load:** a run takes 10–15 s of one CPU core, and at most 2 simulations run at the same time (`SLOTS` in
-  `backend/monetary/server.py`). The steady states and the frequency linearisations are cached in memory per
-  scenario, so repeated runs are faster.
+  `backend/monetary/server.py`). Steady states and frequency linearisations are cached in memory per scenario.
 - **Logs:** the server prints nothing for normal requests. A failed run shows its message in the page and returns
   HTTP 422.
-- **Blank page:** check that the URL ends in `/monetary/`. A 503 with "Front end not built" means step 2's
-  `npm run build` was not run.
-- **Model:** the app runs `model/Model_Bank_20261111_bank_cleaned up.net`. That file name has a space, so quote it
-  in shell commands. LTspice output (`model/*.raw`, `.db`, `.log`) is git-ignored and must not be committed: one
-  `.raw` was 334 MB, over GitHub's 100 MB limit.
-- **More detail:** the "Monetary Policy Lab" section of `README.md` describes the code, tests and design.
+- **Blank page:** check that the URL ends in `/monetary/`. A 503 with "Front end not built" means `npm run build`
+  was not run.
+- **Model:** the app runs `model/Model_Bank_20261111_bank_cleaned up.net`. The file name has a space, so quote it in
+  shell commands. LTspice output (`model/*.raw`, `.db`, `.log`) is git-ignored and must not be committed (one `.raw`
+  was 334 MB, over GitHub's 100 MB limit).
+- **More detail:** `README.md` describes the code, tests and design.
 
 Questions: Friso (`Phresho` on GitHub).

@@ -1,0 +1,72 @@
+# Monetary Policy Lab tests on Windows x64 with the official ngspice 45.2 DLL (the set-up of the Azure VM).
+# With the DLL loaded the tests must pass, not skip: the "ngspice loads" step fails the job otherwise.
+#
+# Other DLL package: set the repository variables NGSPICE_DLL_URL and NGSPICE_DLL_SHA256
+# (Settings > Secrets and variables > Actions > Variables), or start the workflow by hand with those inputs.
+name: windows-ngspice
+
+on:
+  push:
+    paths: ["backend/**", "tests/**", "model/**", ".github/workflows/windows-ngspice.yml"]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      dll_url:
+        description: "URL of the ngspice DLL archive (.7z or .zip); empty = default 45.2"
+        required: false
+      dll_sha256:
+        description: "SHA-256 of that archive"
+        required: false
+
+jobs:
+  windows:
+    runs-on: windows-2022
+    timeout-minutes: 30
+    env:
+      MONETARY_NGSPICE_TIMEOUT: "120"
+      PYTHONUTF8: "1"
+      # Official build from sourceforge.net/projects/ngspice (ng-spice-rework/old-releases/45.2), checksum of 6 Nov 2026.
+      DEFAULT_DLL_URL: https://sourceforge.net/projects/ngspice/files/ng-spice-rework/old-releases/45.2/ngspice-45.2_dll_64.7z/download
+      DEFAULT_DLL_SHA256: ff110ebb04367eb37ff3c88c75ab3bea1b2191c11efce78f264c2ca73034762b
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Python packages
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r backend/requirements.txt
+
+      - name: Download and verify the ngspice DLL
+        shell: pwsh
+        run: |
+          $url = "${{ inputs.dll_url }}"; if (-not $url) { $url = "${{ vars.NGSPICE_DLL_URL }}" }; if (-not $url) { $url = $env:DEFAULT_DLL_URL }
+          $sha = "${{ inputs.dll_sha256 }}"; if (-not $sha) { $sha = "${{ vars.NGSPICE_DLL_SHA256 }}" }; if (-not $sha) { $sha = $env:DEFAULT_DLL_SHA256 }
+          $dir = Join-Path $env:RUNNER_TEMP "ngspice"
+          New-Item -ItemType Directory -Force -Path $dir | Out-Null
+          $ext = if ($url -match "\.zip") { "zip" } else { "7z" }
+          $archive = Join-Path $dir "ngspice.$ext"
+          curl.exe -fsSL --retry 5 --retry-delay 5 -o $archive $url
+          if ($LASTEXITCODE -ne 0) { throw "download failed: $url" }
+          $got = (Get-FileHash -Algorithm SHA256 $archive).Hash.ToLower()
+          Write-Host "sha256 $got"
+          if ($got -ne $sha.ToLower()) { throw "checksum mismatch: expected $sha, got $got" }
+          7z x $archive "-o$dir" -y | Out-Null
+          $dll = Get-ChildItem -Recurse -Path $dir -Filter "ngspice*.dll" | Where-Object { $_.FullName -match "dll-vs" } | Select-Object -First 1
+          if (-not $dll) { $dll = Get-ChildItem -Recurse -Path $dir -Filter "ngspice*.dll" | Select-Object -First 1 }
+          if (-not $dll) { throw "no ngspice*.dll in the archive" }
+          $spinit = Get-ChildItem -Recurse -Path $dir -Filter "spinit" | Select-Object -First 1
+          $libdir = $spinit.Directory.Parent.FullName   # ...\share\ngspice (ngspice reads %SPICE_LIB_DIR%\scripts\spinit)
+          "NGSPICE_LIBRARY_PATH=$($dll.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "SPICE_LIB_DIR=$libdir" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: ngspice loads (fails the job if not)
+        timeout-minutes: 2
+        run: python -c "import sys; sys.path.insert(0, 'backend'); from monetary import ngspice as ng; assert ng.available(), 'libngspice did not load'; print('ngspice loaded')"
+
+      - name: Tests
+        timeout-minutes: 15
+        run: python -m pytest -q -rs tests/test_monetary.py
