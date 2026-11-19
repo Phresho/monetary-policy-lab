@@ -2,11 +2,12 @@
 from __future__ import annotations
 from functools import lru_cache
 import json
+import re
 import time
 from typing import Literal
 
 import numpy as np
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from . import netlist as nl, ngspice as ng, steady
 
@@ -21,6 +22,36 @@ DEFAULTS = {"kp": _P["kp"], "ki": _P["ki"], "kd": _P["kd"], "r_star": _P["r_star
 # stable with a phase margin of about 50 degrees (tests/test_monetary.py). The netlist values stay the slider hints.
 START_KI = 0.04
 PHI_TARGET = _P.get("phi_target")   # target bank leverage, a reference line in the balance-sheet panel
+
+# Changeable model variables: behavioural sources whose value is a fixed number (I=0.08), so flat over the run. The
+# page shows them in their own panel; a scenario can set any of them (model units). Found in the netlist, so a new
+# constant source shows up by itself; the ones below get a name, an explanation, a display unit and slider bounds
+# (display units). The inflation target has its own slider (target_pct) and is left out here.
+CONST_INFO = {
+    "Simple_ROI": ("Return on capital (Simple ROI)", "Households compare it with the policy rate: the incentive to invest, and the capital income (ROI x capital stock).", "%", 100, (0.0, 20.0)),
+    "R_for": ("Foreign interest rate R_for", "Interest earned on foreign assets, and the pull toward foreign bonds against R and the long yield.", "%", 100, (-2.0, 15.0)),
+    "APP": ("Asset purchases (APP)", "Long-term bonds the central bank holds; they leave the banks' bond book (B_L_bank).", "bonds", 1, (0.0, 10.0)),
+    "Goods_Imported": ("Imported goods", "Fixed import flow of the foreign sector (paid at the exchange rate).", "/time unit", 1, (0.0, 0.2)),
+    "Goods_Exported": ("Exported goods", "Fixed export flow of the foreign sector (earned at the exchange rate).", "/time unit", 1, (0.0, 0.2)),
+}
+_CONST_RE = re.compile(r"^B§(\w+)\s+(\S+)\s+(\S+)\s+I\s*=\s*([-+]?[0-9.]+(?:[eE][-+]?\d+)?)\s*$")
+
+
+def _constants() -> dict[str, dict]:
+    out = {}
+    for line in nl.read_model():
+        m = _CONST_RE.match(line.strip())
+        if not m or m.group(1) == "Target_CPI":
+            continue
+        ref, value = m.group(1), float(m.group(4))
+        label, info, unit, scale, bounds = CONST_INFO.get(ref, (ref, "A fixed value in the netlist.", "", 1,
+                                                             (min(0.0, 2 * value), max(1.0, 2 * abs(value)))))
+        out[ref] = {"name": f"B§{ref}", "ref": ref, "label": label, "info": info, "unit": unit, "scale": scale,
+                    "min": bounds[0], "max": bounds[1], "value": value, "flow": m.group(2) != "0" or m.group(3) != "0"}
+    return out
+
+
+CONSTANTS = _constants()
 
 
 class Scenario(BaseModel):
@@ -41,6 +72,20 @@ class Scenario(BaseModel):
     rate_pct: float = Field(2.0, ge=-1, le=10)
     step_pct: float = Field(0.5, ge=-5, le=5)
     step_time: float = Field(400.0, ge=0, le=1600)
+    # Changeable model variables {ref: value in model units}; missing ones keep the netlist's value
+    constants: dict[str, float] = Field(default_factory=dict)
+
+    @field_validator("constants")
+    @classmethod
+    def _known_constants(cls, v: dict[str, float]) -> dict[str, float]:
+        for k, x in v.items():
+            if k not in CONSTANTS:
+                raise ValueError(f"{k} is not a changeable model variable")
+            c = CONSTANTS[k]
+            if not (np.isfinite(x) and c["min"] / c["scale"] - 1e-12 <= x <= c["max"] / c["scale"] + 1e-12):
+                raise ValueError(f"{k}: {x} is outside {c['min']}..{c['max']} {c['unit']}")
+        # sorted and without the netlist's own values, so equal scenarios share one cache key
+        return {k: float(v[k]) for k in sorted(v) if abs(v[k] - CONSTANTS[k]["value"]) > 1e-15}
 
 
 TARGET_OLD = "B§Target_CPI 0 0 I=0.02"
@@ -56,6 +101,8 @@ def build(s: Scenario) -> list[str]:
     if not s.closed:
         i = nl._index(lines, "B§R 0 0 ")
         lines[i] = f"B§R 0 0 I =if(time<{s.step_time:g}, {s.rate_pct / 100:.8g}, {(s.rate_pct + s.step_pct) / 100:.8g})"
+    for ref, value in s.constants.items():
+        nl.set_constant(lines, ref, value)
     return lines
 
 

@@ -320,3 +320,23 @@ def test_steady_start_with_a_larger_kp():
     from monetary.scenario import run
     r = run(Scenario(closed=True, kp=0.15, ki=0.03, kd=1.0))
     assert abs(r["metrics"]["inflation_end_pct"] - 2.0) < 0.1
+
+
+def test_changeable_model_variables():
+    """Fixed-number sources (Simple ROI, R_for, APP, fixed trade flows) are found in the netlist and can be set per
+    scenario; the netlist's own value is dropped from the scenario, an unknown name or an out-of-range value is refused,
+    and a changed return on capital changes the run."""
+    import pytest
+    from pydantic import ValidationError
+    from monetary.scenario import CONSTANTS, Scenario, build, run
+    assert {"Simple_ROI", "R_for", "APP", "Goods_Imported", "Goods_Exported"} <= set(CONSTANTS)
+    assert "Target_CPI" not in CONSTANTS
+    s = Scenario(constants={"Simple_ROI": 0.06, "R_for": 0.05})
+    assert s.constants == {"Simple_ROI": 0.06}
+    assert any(l.strip() == "B§Simple_ROI 0 0 I=0.06" for l in build(s))
+    with pytest.raises(ValidationError):
+        Scenario(constants={"Kp": 0.1})
+    with pytest.raises(ValidationError):
+        Scenario(constants={"R_for": 5.0})
+    base, low = run(Scenario()), run(s)
+    assert base["series"]["I(Investment)"]["values"][-1] != pytest.approx(low["series"]["I(Investment)"]["values"][-1], rel=1e-4)

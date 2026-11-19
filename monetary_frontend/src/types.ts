@@ -3,6 +3,7 @@ export interface Scenario {
   kp: number; ki: number; kd: number; derivative: 'filtered' | 'netlist'; tau_d: number;
   r_star: number; target_pct: number; t_start: number;
   rate_pct: number; step_pct: number; step_time: number;
+  constants?: Record<string, number>;   // changeable model variables {ref: value in model units}
 }
 export interface Series { label: string; unit: string; values: number[] }
 export interface Metrics { inflation_rmse_pts: number; inflation_max_dev_pts: number; inflation_end_pct: number; rate_min_pct: number; rate_max_pct: number; gdp_growth_pct_per_year: number }
@@ -12,7 +13,10 @@ export interface SavedRun extends Run { id: number; label: string }
 export interface Catalogue {
   defaults: Scenario; netlist: Record<string, number>; series: { key: string; label: string; unit: string }[];
   time: { units_per_year: number; t_stop: number }; solver: string | null; phi_target: number | null;
+  constants: ConstantVar[];
 }
+// A source with a fixed number in the netlist (flat over a run); min, max and the shown value are in display units (value x scale).
+export interface ConstantVar { name: string; ref: string; label: string; info: string; unit: string; scale: number; min: number; max: number; value: number; flow: boolean }
 
 export function autoLabel(id: number, s: Scenario): string {
   return `#${id} ` + (s.closed ? `rule Kp ${s.kp} · Ki ${s.ki} · Kd ${s.kd}` : `rate ${s.rate_pct}% ${s.step_pct >= 0 ? '+' : ''}${s.step_pct} pt`);

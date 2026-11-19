@@ -293,6 +293,7 @@ DASH_GROUPS = {   # the signal-only sources outside the plant boxes, by what the
 
 
 def dashboard() -> list[dict]:
+    from .scenario import CONSTANTS
     """Every signal-only source (both nodes ground or unconnected) outside the plant and loop boxes: the variables the
     plant imports. With its group, expression, and the elements that read it (and where they sit)."""
     m = model_map()
@@ -308,5 +309,6 @@ def dashboard() -> list[dict]:
         if e["sector"] in PLANT_BOXES or e["sector"] in LOOP_BOXES or not signal_only or e["kind"] not in ("behavioural current", "current source"):
             continue
         out.append({"name": e["name"], "ref": e["ref"], "group": group_of.get(e["ref"], "Other"), "expr": exprs[e["name"]],
+                    "constant": e["ref"] in CONSTANTS,
                     "box": e["sector"], "readers": [r for r in readers.get(e["ref"].lower(), []) if r["name"] != e["name"]]})
     return out

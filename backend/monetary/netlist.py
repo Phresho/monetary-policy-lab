@@ -50,6 +50,16 @@ def set_param(lines: list[str], name: str, value: float) -> None:
     lines[i] = pat.sub(lambda m: f"{m.group(1)}{value:.10g}", lines[i], count=1)
 
 
+def set_constant(lines: list[str], ref: str, value: float) -> None:
+    """Give a constant behavioural source (B§ref n1 n2 I=<number>) a new value."""
+    pat = re.compile(rf"^(B§{re.escape(ref)}\s+\S+\s+\S+\s+I\s*=\s*)[-+]?[0-9.]+(?:[eE][-+]?\d+)?\s*$")
+    hits = [i for i, l in enumerate(lines) if pat.match(l.strip())]
+    if len(hits) != 1:
+        raise ValueError(f"expected one constant source {ref}, found {len(hits)}")
+    i = hits[0]
+    lines[i] = pat.sub(lambda m: f"{m.group(1)}{value:.10g}", lines[i].strip())
+
+
 @dataclass(frozen=True)
 class Policy:
     closed: bool = False           # False: the netlist's exogenous rate path (0.02, 0.025 from t = 400)

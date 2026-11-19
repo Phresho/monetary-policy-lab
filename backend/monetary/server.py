@@ -13,7 +13,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from . import ngspice as ng
-from .scenario import DEFAULTS, PHI_TARGET, SERIES, T_STOP, UNITS_PER_YEAR, Scenario, run
+from .scenario import CONSTANTS, DEFAULTS, PHI_TARGET, SERIES, T_STOP, UNITS_PER_YEAR, Scenario, run
 
 ROOT = Path(__file__).resolve().parents[2]
 DIST = ROOT / "monetary_frontend" / "dist"
@@ -69,7 +69,8 @@ def create_app() -> FastAPI:
     def catalogue():
         return {"defaults": Scenario().model_dump(), "netlist": DEFAULTS, "schema": Scenario.model_json_schema(),
                 "series": [{"key": k, "label": l, "unit": u} for k, l, u, _ in SERIES],
-                "time": {"units_per_year": UNITS_PER_YEAR, "t_stop": T_STOP}, "phi_target": PHI_TARGET, "solver": "ngspice" if ng.available() else None}
+                "time": {"units_per_year": UNITS_PER_YEAR, "t_stop": T_STOP}, "phi_target": PHI_TARGET,
+                "constants": list(CONSTANTS.values()), "solver": "ngspice" if ng.available() else None}
 
     @app.post("/api/runs")
     def create_run(scenario: Scenario):  # FastAPI runs this in its thread pool

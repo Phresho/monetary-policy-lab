@@ -3,6 +3,7 @@ import { Analysis, AnalysisResult } from './Analysis';
 import { ModelMap } from './ModelMap';
 import { FlowsView } from './FlowsView';
 import { RobustView } from './RobustView';
+import { ModelVars } from './ModelVars';
 import { RunLibrary, SimView } from './SimView';
 import { api } from './api';
 import { Marker } from './Chart';
@@ -10,6 +11,8 @@ import { autoLabel, Catalogue, Run, SavedRun, Scenario } from './types';
 import { applyThemeChoice, storedThemeChoice, ThemeChoice } from './viz';
 
 const MAX_RUNS = 8;
+const SIDE_KEY = 'mpl.sideOpen';
+function storedSide(): boolean { try { return localStorage.getItem(SIDE_KEY) !== '0'; } catch { return true; } }
 
 function Slider({ label, value, min, max, step, onChange, hint, format = v => v.toFixed(2) }:
   { label: string; value: number; min: number; max: number; step: number; onChange: (v: number) => void; hint?: string; format?: (v: number) => string }) {
@@ -37,6 +40,8 @@ export default function App() {
   const anSeq = useRef(0);
   const [themeChoice, setThemeChoice] = useState<ThemeChoice>(storedThemeChoice);
   useEffect(() => applyThemeChoice(themeChoice), [themeChoice]);
+  const [sideOpen, setSideOpen] = useState(storedSide);   // the settings panel on the left folds in to a narrow rail
+  useEffect(() => { try { localStorage.setItem(SIDE_KEY, sideOpen ? '1' : '0'); } catch { /* private window */ } }, [sideOpen]);
 
   // Frequency tab: re-analyse 300 ms after the last change (the plant is cached, so gain changes are instant;
   // a new Kp, R* or year needs a new linearisation, 15-40 s). Only the latest request is shown.
@@ -98,8 +103,16 @@ export default function App() {
         </select></label>
       </div>
     </header>
-    <div className="layout">
-      <aside className="panel controls">
+    <div className={`layout${sideOpen ? '' : ' side-closed'}`}>
+      {!sideOpen ? <aside className="panel rail" aria-label="Settings (folded in)">
+        <button className="ghost icon" onClick={() => setSideOpen(true)} title="Show the settings" aria-label="Show the settings" aria-expanded={false}>»</button>
+        <span className="rail-label" onClick={() => setSideOpen(true)}>{s.closed ? 'Closed loop' : 'Open loop'} · settings</span>
+        {(tab === 'sim' || tab === 'map') && <button className="ghost icon rail-run" onClick={() => void simulate()} disabled={busy} title={busy ? 'Simulating…' : 'Run simulation'} aria-label="Run simulation">{busy ? '…' : '▶'}</button>}
+      </aside> : <aside className="panel controls">
+        <div className="side-head">
+          <span className="small muted">Settings</span>
+          <button className="ghost icon" onClick={() => setSideOpen(false)} title="Fold the settings in (bigger circuit map)" aria-label="Fold the settings in" aria-expanded={true}>«</button>
+        </div>
         <div className="segmented" role="group" aria-label="Loop">
           <button className={!s.closed ? 'active' : ''} onClick={() => set({ closed: false })}>Open loop</button>
           <button className={s.closed ? 'active' : ''} onClick={() => set({ closed: true })}>Closed loop</button>
@@ -128,7 +141,7 @@ export default function App() {
         {tab === 'flows' ? <p className="muted note">The flows are those of the active run (Simulation tab).</p> : tab === 'sim' || tab === 'map' ? <button className="primary" onClick={() => void simulate()} disabled={busy}>{busy ? 'Simulating… (10–15 s)' : 'Run simulation'}</button>
           : <p className="muted note">The analysis updates by itself when you move a slider. Then try the gains in the Simulation tab.</p>}
         <p className="muted note">Time axis: 120 model time units = 1 year (assumed from the /120 in the interest flows).</p>
-      </aside>
+      </aside>}
       <main className="results">
         <div className="tabs" role="tablist">
           <button role="tab" aria-selected={tab === 'map'} className={tab === 'map' ? 'active' : ''} onClick={() => setTab('map')}>Circuit map</button>
@@ -138,11 +151,13 @@ export default function App() {
           <button role="tab" aria-selected={tab === 'flows'} className={tab === 'flows' ? 'active' : ''} onClick={() => setTab('flows')}>Sector flows</button>
         </div>
         {error && <p className="notice bad">{error}</p>}
-        {tab === 'map' ? <ModelMap scenario={run?.scenario ?? s} closed={run?.scenario.closed ?? s.closed} run={run} busy={busy} expectSec={run?.seconds ?? 12}/>
+        {tab === 'map' ? <ModelMap scenario={run?.scenario ?? s} closed={run?.scenario.closed ?? s.closed} run={run} busy={busy} expectSec={run?.seconds ?? 12}
+          vars={<ModelVars vars={cat.constants ?? []} draft={s} applied={run?.scenario} set={set} onRun={() => void simulate()} busy={busy}/>}/>
           : tab === 'flows' ? (run ? <FlowsView scenario={run.scenario}/> : <div className="panel empty"><p className="muted">Run a simulation first.</p></div>)
           : tab === 'robust' ? <RobustView scenario={s} tOp={tOp} onApply={g => set({ ...g, closed: true })}/>
           : tab === 'freq' ? <Analysis a={an} busy={anBusy} tOp={tOp} setTOp={setTOp} closedMode={s.closed} scenario={s} onPick={(ki, kd) => set({ ki, kd, closed: true })}/>
           : !run ? <div className="panel empty"><p className="muted">{busy ? 'Running the first simulation…' : 'No run yet.'}</p></div> : <>
+          <div className="panel"><ModelVars vars={cat.constants ?? []} draft={s} applied={run.scenario} set={set} onRun={() => void simulate()} busy={busy}/></div>
           <SimView cat={cat} run={run} compared={compared} markers={markers} extra={extra} setExtra={setExtra}/>
           <RunLibrary runs={runs} activeId={activeId} compareIds={compareIds}
             setActive={id => { setActiveId(id); setCompareIds(c => c.filter(x => x !== id)); const r = runs.find(x => x.id === id); if (r) setS(r.scenario); }}

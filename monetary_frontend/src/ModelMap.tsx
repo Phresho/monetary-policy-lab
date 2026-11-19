@@ -148,7 +148,7 @@ const mix = (a: string, b: string, k: number) => { const p = (h: string) => { co
   const x = p(a), y = p(b); return `rgb(${x.map((v, i) => Math.round(v + (y[i] - v) * k)).join(',')})`; };
 const within = (outer: string, inner: string) => { let v: string | undefined = inner; while (v) { v = PARENT[v]; if (v === outer) return true; } return false; };
 const inPlant = (id: string) => within(PLANT, id);
-interface DashVar { name: string; ref: string; group: string; expr: string; box: string | null; readers: { name: string; ref: string; sector: string | null }[] }
+interface DashVar { name: string; ref: string; group: string; expr: string; constant?: boolean; box: string | null; readers: { name: string; ref: string; sector: string | null }[] }
 type DashVals = { years: number[]; series: Record<string, number[]> };
 const T_END = 13.33;
 type Sel = { type: 'block' | 'port' | 'node' | 'el' | 'instr'; id: string; q?: 'e' | 'f' };
@@ -216,7 +216,7 @@ const DOT_PERIODS = [100, 200, 400, 800, 1600];   // dot spacing in drawing unit
 // current moves its dots about one spacing per second.
 const DOT_TRAVEL = 400;
 
-export function ModelMap({ scenario, closed, run, busy = false, expectSec = 12 }: { scenario: unknown; closed: boolean; run?: SavedRun; busy?: boolean; expectSec?: number }) {
+export function ModelMap({ scenario, closed, run, busy = false, expectSec = 12, vars }: { scenario: unknown; closed: boolean; run?: SavedRun; busy?: boolean; expectSec?: number; vars?: ReactNode }) {
   const t = useTheme();
   const KIND = kindColor(t);
   const sc = scenario as Scenario | undefined;
@@ -621,7 +621,8 @@ export function ModelMap({ scenario, closed, run, busy = false, expectSec = 12 }
   const el = sel?.type === 'el' ? m.elements.find(e => e.name === sel.id) : undefined;
   const dashOf = (name: string) => dash.find(d => d.name === name);
   const crumbs = ['Feedback loop', ...trail];
-  const groups = [...new Set(dash.map(d => d.group))];
+  const imported = dash.filter(d => !d.constant);   // the fixed ones are in the Changeable model variables panel
+  const groups = [...new Set(imported.map(d => d.group))];
   // the time window applied to a trace (charts) and to the dashboard series
   const inWin = (years: number[], values: number[]) => { const x: number[] = [], y: number[] = []; years.forEach((v, i) => { if (v >= win[0] - 1e-9 && v <= win[1] + 1e-9) { x.push(v); y.push(values[i]); } }); return { x, y }; };
   const wTrace = trace ? inWin(trace.years, trace.values) : undefined;
@@ -827,13 +828,14 @@ export function ModelMap({ scenario, closed, run, busy = false, expectSec = 12 }
       </section>}
       <p className="muted note legend-line">Wires as in your .asc: coloured by the agent that holds the node (the hub of its flows), grey for the return (ground) · <b>f</b> marks: a flow wire crossing an agent's edge, small rings: its return · loop blocks in the colours of the ECB figure</p>
 
+      {vars}
       {/* the dashboard: the current sources outside the plant boxes, which the plant imports */}
       <section className="dash">
         <h3>Imported variables <span className="muted small">· current sources drawn outside the plant: the plant reads them, they are not part of its circuit yet · values at the end of the time window · click a tile to open its chart</span></h3>
         {!vals && <p className="muted note">Values appear once a simulation has run.</p>}
         {groups.map(g => <div key={g} className="dash-group">
           <h4>{g}</h4>
-          <div className="dash-grid">{dash.filter(d => d.group === g).map(d => {
+          <div className="dash-grid">{imported.filter(d => d.group === g).map(d => {
             const ser = vals?.series[d.name], v = ser ? { start: at(ser, win[0]), end: at(ser, win[1]) } : undefined, isOpen = dashOpen === d.name;
             const head = <>
               <span className="dash-name">{pretty(d.ref)}</span>
