@@ -1008,7 +1008,7 @@ export function ModelMap({ scenario, closed, run, busy = false, expectSec = 12, 
               </div>
               <pre className="expr">{d.expr || '—'}</pre>
               {d.readers.length > 0 && <p className="small">Read by: {d.readers.map(r => `${r.ref}${r.sector ? ` (${blockOfDrawing(r.sector)})` : ''}`).join(', ')}</p>}
-              {w ? <Chart title={pretty(d.ref)} unit="value" height={200} group={null} markers={nowMark} lines={[{ name: pretty(d.ref), x: w.x, y: w.y, color: t.inflation }]}/>
+              {w ? <Chart title={pretty(d.ref)} unit="value" height={200} markers={nowMark} lines={[{ name: pretty(d.ref), x: w.x, y: w.y, color: t.inflation }]}/>
                 : <p className="muted note">The chart appears once a simulation has run.</p>}
             </div>;
           })}</div>
@@ -1028,7 +1028,7 @@ export function ModelMap({ scenario, closed, run, busy = false, expectSec = 12, 
               ? <>The flow through the port: the current through <code>{portSel.carriers[0].name}</code>{portSel.carriers.length > 1 ? ` (and ${portSel.carriers.length - 1} more on this node)` : ''}.</>
               : <>The effort: the voltage of node <code>{portSel.node}</code> against ground.</>}</p>
             {traceBusy ? <p className="muted note">Simulating the current scenario…</p>
-              : trace ? <Chart title={trace.trace} unit={sel?.q === 'f' ? 'flow per time unit' : 'effort (node voltage)'} height={220} group={null} markers={nowMark} lines={[{ name: trace.trace, x: wTrace!.x, y: wTrace!.y, color: colorOf(plantDraw?.hub[portSel.node] ?? '') }]}/>
+              : trace ? <Chart title={trace.trace} unit={sel?.q === 'f' ? 'flow per time unit' : 'effort (node voltage)'} height={220} markers={nowMark} lines={[{ name: trace.trace, x: wTrace!.x, y: wTrace!.y, color: colorOf(plantDraw?.hub[portSel.node] ?? '') }]}/>
               : <p className="muted note">No trace.</p>}
             <h3 className="mt">On this node</h3>
             <ul className="conn">{portSel.onNode.map(e => <li key={e.name}><button className="link-btn" onClick={() => setSel({ type: 'el', id: e.name })}>{e.ref}</button>
@@ -1051,13 +1051,13 @@ export function ModelMap({ scenario, closed, run, busy = false, expectSec = 12, 
             <p className="small">{info.about}</p>
             {!parts.closed && share && <p className="notice warn small">Open loop: the rate follows the given path, so these parts are what the rule would ask, not what the economy gets.</p>}
             <p className="small"><b>{s[at] >= 0 ? '+' : '−'}{Math.abs(s[at]).toFixed(3)} %</b> at t = {tNow.toFixed(1)} yr · <b>{endV >= 0 ? '+' : '−'}{Math.abs(endV).toFixed(3)} %</b> at the end{share ? ` · rule output at the end ${S.rule[S.rule.length - 1].toFixed(3)} %` : ''}</p>
-            <Chart title={share ? 'Share of the control effort (%)' : info.title} unit="%" height={230} group={null} markers={nowMark} lines={lines} hoverFormat=".3f"/>
+            <Chart title={share ? 'Share of the control effort (%)' : info.title} unit="%" height={230} markers={nowMark} lines={lines} hoverFormat=".3f"/>
             {share && <p className="muted note">r* + P + I + D (+ the lower bound) is the rule’s output; each part is its own source in the run netlist (B§PI_P, B§PI_I, B§PI_Dterm), so these are simulated values.</p>}
           </>;
         })() : sel.type === 'instr' ? <>
           <h3>u: the policy rate r</h3>
           <p className="muted small">The plant's input, element <code>B§R</code>: {closed ? 'set by the controller (the rule B_PI through the smoothing R15·C8): closed loop.' : 'the given rate path (base rate, then a step; the sliders on the left): open loop, the controller is out of the loop.'}</p>
-          {traceBusy ? <p className="muted note">Simulating…</p> : trace ? <Chart title={trace.trace} unit="rate" height={220} group={null} lines={[{ name: 'u = r', x: wTrace!.x, y: wTrace!.y, color: FIG.ctrl.stroke }]}/> : null}
+          {traceBusy ? <p className="muted note">Simulating…</p> : trace ? <Chart title={trace.trace} unit="rate" height={220} lines={[{ name: 'u = r', x: wTrace!.x, y: wTrace!.y, color: FIG.ctrl.stroke }]}/> : null}
         </> : el ? <>
           <h3>{el.ref}</h3>
           <p className="muted small">{el.kind}{el.sector ? ` · ${blockOfDrawing(el.sector)}` : ' · outside the plant boxes (dashboard)'} · netlist name <code>{el.name}</code></p>
@@ -1065,7 +1065,7 @@ export function ModelMap({ scenario, closed, run, busy = false, expectSec = 12, 
           <pre className="expr">{el.expr || '—'}</pre>
           {dashOf(el.name)?.readers.length ? <p className="small">Read by: {dashOf(el.name)!.readers.map(r => `${r.ref}${r.sector ? ` (${blockOfDrawing(r.sector)})` : ''}`).join(', ')}</p> : null}
           {traceBusy ? <p className="muted note">Simulating the current scenario for this trace…</p>
-            : trace ? <Chart title={trace.trace} unit={el.kind === 'inductor' || el.kind.includes('current') ? 'current (flow)' : 'value'} height={220} group={null} markers={nowMark}
+            : trace ? <Chart title={trace.trace} unit={el.kind === 'inductor' || el.kind.includes('current') ? 'current (flow)' : 'value'} height={220} markers={nowMark}
                 lines={[{ name: trace.trace, x: wTrace!.x, y: wTrace!.y, color: KIND[el.kind] ?? t.inflation }]}/>
             : <p className="muted note">No trace for this element.</p>}
         </> : selBlock ? <>

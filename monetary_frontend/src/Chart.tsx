@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { axis, baseLayout, download, joinHoverGroup, toCsv, useTheme, valueAt } from './viz';
+import { axis, baseLayout, download, toCsv, useStable, useTheme, valueAt } from './viz';
 
 // tag: the short text of the line's end label (defaults to the name)
 export interface Line { tag?: string; name: string; x: number[]; y: number[]; color: string; dash?: string; width?: number; fill?: string; fillcolor?: string; hidden?: boolean }
@@ -25,14 +25,15 @@ function xExtent(lines: Line[]) {
   return xs.length ? [Math.min(...xs), Math.max(...xs)] : undefined;
 }
 
-export function Chart({ title, unit, lines, markers = [], height = 280, group = 'time', xName = 'year', xSuffix = ' yr', note, shapes = [], annotations = [], compact = false, hoverFormat = '.3f', yRange }:
-  { title: string; unit: string; lines: Line[]; markers?: Marker[]; height?: number; group?: string | null; xName?: string; xSuffix?: string; note?: string;
+export function Chart({ title, unit, lines: linesIn, markers: markersIn = [], height = 280, xName = 'year', xSuffix = ' yr', note, shapes: shapesIn = [], annotations: annotationsIn = [], compact = false, hoverFormat = '.3f', yRange: yRangeIn }:
+  { title: string; unit: string; lines: Line[]; markers?: Marker[]; height?: number; xName?: string; xSuffix?: string; note?: string;
     shapes?: object[]; annotations?: object[]; compact?: boolean; hoverFormat?: string; yRange?: number[] }) {
   const box = useRef<HTMLDivElement>(null);
   const t = useTheme();
   const [table, setTable] = useState(false);
+  const lines = useStable(linesIn), markers = useStable(markersIn), shapes = useStable(shapesIn), annotations = useStable(annotationsIn), yRange = useStable(yRangeIn);
   useEffect(() => {
-    let live = true, leave: (() => void) | undefined;
+    let live = true;
     const node = box.current;
     void import('plotly.js-dist-min').then(({ default: Plotly }) => {
       if (!live || !node) return;
@@ -54,10 +55,10 @@ export function Chart({ title, unit, lines, markers = [], height = 280, group = 
           ...markers.filter(() => !compact).map(m => ({ x: m.x, yref: 'paper', y: 1, text: m.label, showarrow: false, xanchor: 'left', yanchor: 'top', font: { size: 11, color: t.ink2 } })),
           ...labels.map(i => ({ x: i.x, y: i.l.y[i.l.y.length - 1], yshift: i.shift, text: short(i.l.tag ?? i.l.name), showarrow: false, xanchor: 'left', xshift: 6, font: { size: 11, color: t.ink2 } })),
         ],
-      }, { displayModeBar: false, responsive: true }).then(() => { if (live && group) leave = joinHoverGroup(group, node, Plotly); });
+      }, { displayModeBar: false, responsive: true });
     });
-    return () => { live = false; leave?.(); };
-  }, [lines, unit, height, markers, t, group, xSuffix, shapes, annotations, compact, hoverFormat, yRange]);
+    return () => { live = false; };
+  }, [lines, unit, height, markers, t, xSuffix, shapes, annotations, compact, hoverFormat, yRange]);
   return <figure className="chart">
     <figcaption className={compact ? 'compact' : undefined}><span>{title}</span><span className="chart-tools">
       <button className="link-btn" onClick={() => setTable(v => !v)} aria-pressed={table}>{table ? 'Chart' : 'Table'}</button>

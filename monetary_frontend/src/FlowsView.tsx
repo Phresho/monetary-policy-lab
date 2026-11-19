@@ -107,7 +107,7 @@ export function FlowsView({ scenario }: { scenario: Scenario }) {
     </div>
 
     <div className="panel">
-      <Chart title={`Node ${dn.node} over time`} unit="current per time unit" group={null}
+      <Chart title={`Node ${dn.node} over time`} unit="current per time unit"
         note={`What each sector pushes into ${dn.node} (${dn.elements.join(', ')}). The lines add up to zero at every moment.`}
         lines={Object.entries(dn.push).map(([s, v]) => ({ name: s, x: f.years, y: v, color: sectorColor(t, s) }))}
         markers={[{ x: year, label: ' selected year' }]}/>

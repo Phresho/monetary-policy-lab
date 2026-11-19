@@ -5,7 +5,7 @@
 // - Ms map: the blue sequential ramp; inflation gap: diverging blue (below target) / red (above) around a grey middle.
 // Colour follows the quantity, never the position in a chart. Reference lines (target, limits) use ink, not a series colour.
 // Status colours (good / critical) are only for the stability verdict and always come with an icon and a label.
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 export type Mode = 'light' | 'dark';
 
@@ -97,24 +97,20 @@ export function axis(t: Theme, extra: Record<string, unknown> = {}) {
   return { gridcolor: t.grid, linecolor: t.axis, zerolinecolor: t.axis, tickfont: { color: t.muted }, title: { font: { color: t.ink2 } }, ...extra };
 }
 
-// Shared crosshair: hovering one time chart of a group shows the same year in the others.
-type Node = HTMLElement & { on?: (ev: string, fn: (e: { points?: { x: number }[] }) => void) => void };
-const groups = new Map<string, Set<Node>>();
-let syncing = false;
-export function joinHoverGroup(group: string, node: Node, Plotly: { Fx: { hover: (n: HTMLElement, p: object) => void; unhover: (n: HTMLElement) => void } }) {
-  const set = groups.get(group) ?? new Set<Node>(); groups.set(group, set); set.add(node);
-  node.on?.('plotly_hover', e => {
-    if (syncing) return;
-    const x = e.points?.[0]?.x; if (x == null) return;
-    syncing = true;
-    try { set.forEach(n => { if (n !== node && n.isConnected) { try { Plotly.Fx.hover(n, { xval: x }); } catch { /* chart without data yet */ } } }); }
-    finally { syncing = false; }
-  });
-  node.on?.('plotly_unhover', () => {
-    if (syncing) return;
-    set.forEach(n => { if (n !== node && n.isConnected) { try { Plotly.Fx.unhover(n); } catch { /* ignore */ } } });
-  });
-  return () => { set.delete(node); };
+// The previous value when nothing in it changed (references first, then contents), so a parent re-render with fresh
+// but equal arrays and objects does not redraw a Plotly figure. Hover shows only the graph under the mouse.
+function same(a: unknown, b: unknown): boolean {
+  if (a === b) return true;
+  if (typeof a !== 'object' || typeof b !== 'object' || !a || !b) return Number.isNaN(a) && Number.isNaN(b);
+  if (Array.isArray(a) !== Array.isArray(b)) return false;
+  if (Array.isArray(a)) { const y = b as unknown[]; return a.length === y.length && a.every((v, i) => same(v, y[i])); }
+  const ka = Object.keys(a), kb = Object.keys(b);
+  return ka.length === kb.length && ka.every(k => same((a as Record<string, unknown>)[k], (b as Record<string, unknown>)[k]));
+}
+export function useStable<T>(value: T): T {
+  const ref = useRef(value);
+  if (!same(ref.current, value)) ref.current = value;
+  return ref.current;
 }
 
 // CSV of one or more series on their own x grids (rows by x of the first series).
