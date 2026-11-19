@@ -11,8 +11,11 @@ import { autoLabel, Catalogue, Run, SavedRun, Scenario } from './types';
 import { applyThemeChoice, storedThemeChoice, ThemeChoice } from './viz';
 
 const MAX_RUNS = 8;
-const SIDE_KEY = 'mpl.sideOpen';
-function storedSide(): boolean { try { return localStorage.getItem(SIDE_KEY) !== '0'; } catch { return true; } }
+const SIDE_KEY = 'mpl.sideOpen', RIGHT_KEY = 'mpl.rightOpen', WIDE_KEY = 'mpl.rightWide';
+function stored(key: string, dflt: boolean): boolean { try { const v = localStorage.getItem(key); return v == null ? dflt : v === '1'; } catch { return dflt; } }
+function store(key: string, v: boolean) { try { localStorage.setItem(key, v ? '1' : '0'); } catch { /* private window */ } }
+type RightTab = 'sim' | 'freq' | 'robust' | 'flows' | 'vars';
+const RIGHT_TABS: [RightTab, string][] = [['sim', 'Simulation'], ['freq', 'Frequency'], ['robust', 'Robust control'], ['flows', 'Sector flows'], ['vars', 'Model variables']];
 
 function Slider({ label, value, min, max, step, onChange, hint, format = v => v.toFixed(2) }:
   { label: string; value: number; min: number; max: number; step: number; onChange: (v: number) => void; hint?: string; format?: (v: number) => string }) {
@@ -33,20 +36,27 @@ export default function App() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [extra, setExtra] = useState('I(Exchange_rate)');
-  const [tab, setTab] = useState<'sim' | 'freq' | 'robust' | 'flows' | 'map'>('map');  // the circuit map is the start page
+  // The page has three columns: settings (left), the circuit map (centre, always), results (right, in tabs)
+  const [tab, setTab] = useState<RightTab>('sim');
+  const [locate, setLocate] = useState<{ key: string; seq: number }>();   // a result clicked on the right: shown on the map
   const [an, setAn] = useState<AnalysisResult>();
   const [anBusy, setAnBusy] = useState(false);
   const [tOp, setTOp] = useState(0);
   const anSeq = useRef(0);
   const [themeChoice, setThemeChoice] = useState<ThemeChoice>(storedThemeChoice);
   useEffect(() => applyThemeChoice(themeChoice), [themeChoice]);
-  const [sideOpen, setSideOpen] = useState(storedSide);   // the settings panel on the left folds in to a narrow rail
-  useEffect(() => { try { localStorage.setItem(SIDE_KEY, sideOpen ? '1' : '0'); } catch { /* private window */ } }, [sideOpen]);
+  const [sideOpen, setSideOpen] = useState(() => stored(SIDE_KEY, true));     // the settings column folds in to a narrow rail
+  const [rightOpen, setRightOpen] = useState(() => stored(RIGHT_KEY, true));  // so does the results column
+  const [rightWide, setRightWide] = useState(() => stored(WIDE_KEY, false));
+  useEffect(() => store(SIDE_KEY, sideOpen), [sideOpen]);
+  useEffect(() => store(RIGHT_KEY, rightOpen), [rightOpen]);
+  useEffect(() => store(WIDE_KEY, rightWide), [rightWide]);
+  const locateOnMap = (key: string) => setLocate(l => ({ key, seq: (l?.seq ?? 0) + 1 }));
 
   // Frequency tab: re-analyse 300 ms after the last change (the plant is cached, so gain changes are instant;
   // a new Kp, R* or year needs a new linearisation, 15-40 s). Only the latest request is shown.
   useEffect(() => {
-    if (tab !== 'freq' || !s) return;
+    if (tab !== 'freq' || !rightOpen || !s) return;
     const id = ++anSeq.current;
     const timer = window.setTimeout(async () => {
       setAnBusy(true);
@@ -57,7 +67,7 @@ export default function App() {
       finally { if (id === anSeq.current) setAnBusy(false); }
     }, 300);
     return () => window.clearTimeout(timer);
-  }, [tab, s, tOp]);
+  }, [tab, rightOpen, s, tOp]);
 
   useEffect(() => { api<Catalogue>('/catalogue').then(c => { setCat(c); setS(c.defaults); }).catch(e => setError(String(e.message ?? e))); }, []);
   const upy = cat?.time.units_per_year ?? 120;
@@ -103,11 +113,11 @@ export default function App() {
         </select></label>
       </div>
     </header>
-    <div className={`layout${sideOpen ? '' : ' side-closed'}`}>
+    <div className={`layout3${sideOpen ? '' : ' left-closed'}${rightOpen ? '' : ' right-closed'}${rightWide ? ' right-wide' : ''}`}>
       {!sideOpen ? <aside className="panel rail" aria-label="Settings (folded in)">
         <button className="ghost icon" onClick={() => setSideOpen(true)} title="Show the settings" aria-label="Show the settings" aria-expanded={false}>»</button>
         <span className="rail-label" onClick={() => setSideOpen(true)}>{s.closed ? 'Closed loop' : 'Open loop'} · settings</span>
-        {(tab === 'sim' || tab === 'map') && <button className="ghost icon rail-run" onClick={() => void simulate()} disabled={busy} title={busy ? 'Simulating…' : 'Run simulation'} aria-label="Run simulation">{busy ? '…' : '▶'}</button>}
+        {<button className="ghost icon rail-run" onClick={() => void simulate()} disabled={busy} title={busy ? 'Simulating…' : 'Run simulation'} aria-label="Run simulation">{busy ? '…' : '▶'}</button>}
       </aside> : <aside className="panel controls">
         <div className="side-head">
           <span className="small muted">Settings</span>
@@ -137,35 +147,42 @@ export default function App() {
         </>}
         <label className="check"><input type="checkbox" checked={s.steady_start} onChange={e => set({ steady_start: e.target.checked })}/>Start in steady state</label>
         {!s.steady_start && <p className="notice warn">The netlist's own start: P jumps 0.13 → 0.27 and inflation spikes to ~26 000 % in the first months.</p>}
-        {tab === 'map' && <p className="muted note">Click a flow or an element on the map to plot it for the active run (the first run starts by itself).</p>}
-        {tab === 'flows' ? <p className="muted note">The flows are those of the active run (Simulation tab).</p> : tab === 'sim' || tab === 'map' ? <button className="primary" onClick={() => void simulate()} disabled={busy}>{busy ? 'Simulating… (10–15 s)' : 'Run simulation'}</button>
-          : <p className="muted note">The analysis updates by itself when you move a slider. Then try the gains in the Simulation tab.</p>}
+        <p className="muted note">Click a flow or an element on the map to plot it for the active run (the first run starts by itself).</p>
+        <button className="primary" onClick={() => void simulate()} disabled={busy}>{busy ? 'Simulating… (10–15 s)' : 'Run simulation'}</button>
+        {(tab === 'freq' || tab === 'robust') && rightOpen && <p className="muted note">The analysis on the right updates by itself when you move a slider. Then run the simulation to see the gains in time.</p>}
         <p className="muted note">Time axis: 120 model time units = 1 year (assumed from the /120 in the interest flows).</p>
       </aside>}
-      <main className="results">
-        <div className="tabs" role="tablist">
-          <button role="tab" aria-selected={tab === 'map'} className={tab === 'map' ? 'active' : ''} onClick={() => setTab('map')}>Circuit map</button>
-          <button role="tab" aria-selected={tab === 'sim'} className={tab === 'sim' ? 'active' : ''} onClick={() => setTab('sim')}>Simulation</button>
-          <button role="tab" aria-selected={tab === 'freq'} className={tab === 'freq' ? 'active' : ''} onClick={() => setTab('freq')}>Frequency analysis</button>
-          <button role="tab" aria-selected={tab === 'robust'} className={tab === 'robust' ? 'active' : ''} onClick={() => setTab('robust')}>Robust control</button>
-          <button role="tab" aria-selected={tab === 'flows'} className={tab === 'flows' ? 'active' : ''} onClick={() => setTab('flows')}>Sector flows</button>
-        </div>
+      <main className="centre">
         {error && <p className="notice bad">{error}</p>}
-        {tab === 'map' ? <ModelMap scenario={run?.scenario ?? s} closed={run?.scenario.closed ?? s.closed} run={run} busy={busy} expectSec={run?.seconds ?? 12}
-          vars={<ModelVars vars={cat.constants ?? []} draft={s} applied={run?.scenario} set={set} onRun={() => void simulate()} busy={busy}/>}/>
+        <ModelMap scenario={run?.scenario ?? s} closed={run?.scenario.closed ?? s.closed} run={run} busy={busy} expectSec={run?.seconds ?? 12} locate={locate}/>
+      </main>
+      {!rightOpen ? <aside className="panel rail right" aria-label="Results (folded in)">
+        <button className="ghost icon" onClick={() => setRightOpen(true)} title="Show the results" aria-label="Show the results" aria-expanded={false}>«</button>
+        <span className="rail-label" onClick={() => setRightOpen(true)}>Results · {RIGHT_TABS.find(x => x[0] === tab)?.[1]}</span>
+      </aside> : <aside className="rightcol" aria-label="Results">
+        <div className="rc-head">
+          <div className="tabs" role="tablist">
+            {RIGHT_TABS.map(([id, label]) => <button key={id} role="tab" aria-selected={tab === id} className={tab === id ? 'active' : ''} onClick={() => setTab(id)}>{label}</button>)}
+          </div>
+          <div className="rc-tools">
+            <button className="ghost icon" onClick={() => setRightWide(w => !w)} title={rightWide ? 'Narrower results column' : 'Wider results column'} aria-label={rightWide ? 'Narrower results column' : 'Wider results column'}>{rightWide ? '→' : '←'}</button>
+            <button className="ghost icon" onClick={() => setRightOpen(false)} title="Fold the results in (bigger circuit map)" aria-label="Fold the results in" aria-expanded={true}>»</button>
+          </div>
+        </div>
+        {tab === 'vars' ? <div className="panel"><ModelVars vars={cat.constants ?? []} draft={s} applied={run?.scenario} set={set} onRun={() => void simulate()} busy={busy}/></div>
           : tab === 'flows' ? (run ? <FlowsView scenario={run.scenario}/> : <div className="panel empty"><p className="muted">Run a simulation first.</p></div>)
           : tab === 'robust' ? <RobustView scenario={s} tOp={tOp} onApply={g => set({ ...g, closed: true })}/>
           : tab === 'freq' ? <Analysis a={an} busy={anBusy} tOp={tOp} setTOp={setTOp} closedMode={s.closed} scenario={s} onPick={(ki, kd) => set({ ki, kd, closed: true })}/>
           : !run ? <div className="panel empty"><p className="muted">{busy ? 'Running the first simulation…' : 'No run yet.'}</p></div> : <>
-          <div className="panel"><ModelVars vars={cat.constants ?? []} draft={s} applied={run.scenario} set={set} onRun={() => void simulate()} busy={busy}/></div>
-          <SimView cat={cat} run={run} compared={compared} markers={markers} extra={extra} setExtra={setExtra}/>
+          <p className="muted note locate-hint">Click a chart or a tile to see where that signal sits in the circuit.</p>
+          <SimView cat={cat} run={run} compared={compared} markers={markers} extra={extra} setExtra={setExtra} onLocate={locateOnMap} located={locate?.key}/>
           <RunLibrary runs={runs} activeId={activeId} compareIds={compareIds}
             setActive={id => { setActiveId(id); setCompareIds(c => c.filter(x => x !== id)); const r = runs.find(x => x.id === id); if (r) setS(r.scenario); }}
             toggleCompare={id => setCompareIds(c => c.includes(id) ? c.filter(x => x !== id) : [...c, id])}
             rename={(id, label) => setRuns(rs => rs.map(r => r.id === id ? { ...r, label } : r))}
             remove={id => { setRuns(rs => rs.filter(r => r.id !== id)); setCompareIds(c => c.filter(x => x !== id)); if (id === activeId) { const rest = runs.filter(r => r.id !== id); setActiveId(rest[rest.length - 1]?.id ?? 0); } }}/>
         </>}
-      </main>
+      </aside>}
     </div>
   </>;
 }

@@ -216,7 +216,7 @@ const DOT_PERIODS = [100, 200, 400, 800, 1600];   // dot spacing in drawing unit
 // current moves its dots about one spacing per second.
 const DOT_TRAVEL = 400;
 
-export function ModelMap({ scenario, closed, run, busy = false, expectSec = 12, vars }: { scenario: unknown; closed: boolean; run?: SavedRun; busy?: boolean; expectSec?: number; vars?: ReactNode }) {
+export function ModelMap({ scenario, closed, run, busy = false, expectSec = 12, vars, locate }: { scenario: unknown; closed: boolean; run?: SavedRun; busy?: boolean; expectSec?: number; vars?: ReactNode; locate?: { key: string; seq: number } }) {
   const t = useTheme();
   const KIND = kindColor(t);
   const sc = scenario as Scenario | undefined;
@@ -507,6 +507,48 @@ export function ModelMap({ scenario, closed, run, busy = false, expectSec = 12, 
     return () => { live = false; };
   }, [traceOf, scenario]);
 
+  // ---------------------------------------------------------------- a result clicked in the right column: where it is
+  // The signal's element is found (I(x): the element x, V(node): the element on that node), its block is opened and
+  // the camera flies to it; a ring pulses on it and its details open, so a chart on the right ties to its place here.
+  const [pulse, setPulse] = useState<{ x: number; y: number; r: number; seq: number; label: string }>();
+  useEffect(() => {
+    if (!locate || !m) return;
+    const mI = /^I\((.+)\)$/i.exec(locate.key), mV = /^V\((.+)\)$/i.exec(locate.key);
+    let el: El | undefined;
+    if (mI) el = m.elements.find(e => e.ref.toLowerCase() === mI[1].toLowerCase());
+    else if (mV) {
+      const node = mV[1];
+      el = node.toLowerCase() === 'n_pi' ? m.elements.find(e => e.name === 'B_PI')
+        : m.elements.find(e => e.nodes.includes(node) && ['inductor', 'behavioural current', 'current source', 'capacitor'].includes(e.kind)) ?? m.elements.find(e => e.nodes.includes(node));
+    }
+    if (!el) return;
+    setWhole(false);
+    const cx = (el.pins[0][0] + el.pins[1][0]) / 2, cy = (el.pins[0][1] + el.pins[1][1]) / 2;
+    const base = open.filter(o => o !== 'Controller' && o !== 'Output');
+    if (el.sector && inPlant(el.sector)) {   // inside the plant: open its agent, fly there, ring on the element
+      const next = [...new Set([...base, ...pathTo(el.sector)])], l = layoutFor(next), P = l.boxes[PLANT] ?? geo.P_OPEN;
+      setOpen(next); setFocus(el.sector);
+      flyTo(view(focusBoxOf(el.sector, next), 0.15));
+      setPulse({ x: P.x + (cx - geo.VIEW.x) * K, y: P.y + HEAD + (cy - geo.VIEW.y) * K, r: 30, seq: locate.seq, label: el.ref.replace(/_/g, ' ') });
+    } else {   // on the loop: the block that holds it (central bank, inflation measurement), u, or the plant it feeds
+      const l = layoutFor(base), po = base.includes(PLANT);
+      setOpen(base); setFocus(undefined);
+      flyTo(view(focusBoxOf(undefined, base), 0.04));
+      const label = el.ref.replace(/_/g, ' ');
+      if (el.name === 'B§R') {
+        const c = boxIn('Controller', l, po), P = boxIn(PLANT, l, po);
+        setPulse({ x: (c.x + c.w + P.x) / 2, y: c.y + c.h / 2, r: 40, seq: locate.seq, label });
+      } else {
+        const id = el.sector === 'Central Bank' ? 'Controller' : el.sector === 'CPI values' ? 'Output' : PLANT, b = boxIn(id, l, po);
+        if (id === PLANT) setDashOpen(el.name);   // an imported variable: its tile below the map opens too
+        setPulse({ x: b.x + b.w / 2, y: b.y + b.h / 2, r: Math.max(b.w, b.h) / 2 + 24, seq: locate.seq, label });
+      }
+    }
+    setSel({ type: 'el', id: el.name });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [locate?.seq, m]);
+  useEffect(() => { if (!pulse) return; const id = window.setTimeout(() => setPulse(undefined), 4500); return () => window.clearTimeout(id); }, [pulse]);
+
   if (error) return <p className="notice bad">{error}</p>;
   if (!m) return <div className="panel empty"><p className="muted">Loading the circuit…</p></div>;
 
@@ -787,6 +829,11 @@ export function ModelMap({ scenario, closed, run, busy = false, expectSec = 12, 
               </g>;
             })}
           </svg>}
+          {pulse && <g key={pulse.seq} className="locate-pulse" aria-hidden="true">
+            <circle cx={pulse.x} cy={pulse.y} r={pulse.r} className="lp-ring"/>
+            <circle cx={pulse.x} cy={pulse.y} r={pulse.r} className="lp-wave"/>
+            <text x={pulse.x} y={pulse.y - pulse.r - 10 * px} fontSize={Math.max(14 * px, 10)} className="lp-label">{pulse.label}</text>
+          </g>}
           {loopLeaf && <rect className="scrim" x={-20000} y={-20000} width={60000} height={60000} data-scrim="1"/>}
           {loopLeaf && block(loopLeaf)}
         </>}

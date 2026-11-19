@@ -31,9 +31,10 @@ function Delta({ now, ref: base, unit, label, digits = 2 }: { now: number; ref?:
   return <small className="delta">{d > 0 ? '▲' : '▼'} {Math.abs(d).toFixed(digits)} {unit} vs {label}</small>;
 }
 
-export function SimView({ cat, run, compared, markers, extra, setExtra }:
-  { cat: Catalogue; run: SavedRun; compared: SavedRun[]; markers: Marker[]; extra: string; setExtra: (k: string) => void }) {
+export function SimView({ cat, run, compared, markers, extra, setExtra, onLocate, located }:
+  { cat: Catalogue; run: SavedRun; compared: SavedRun[]; markers: Marker[]; extra: string; setExtra: (k: string) => void; onLocate?: (key: string) => void; located?: string }) {
   const t = useTheme();
+  const loc = { onLocate, located };
   const [indexed, setIndexed] = useState(false);
   const m = run.metrics, ref = compared[0], rm = ref?.metrics, refName = ref?.label;
   const target = run.series['I(Target_CPI)'].values;
@@ -78,25 +79,25 @@ export function SimView({ cat, run, compared, markers, extra, setExtra }:
 
   return <>
     <div className="kpis">
-      <Kpi t={t} label="Inflation vs target (RMS)" value={m.inflation_rmse_pts.toFixed(2)} unit="pt" spark={gap.map(Math.abs)} color={t.inflation}
+      <Loc {...loc} k="I(CPI_filtered)"><Kpi t={t} label="Inflation vs target (RMS)" value={m.inflation_rmse_pts.toFixed(2)} unit="pt" spark={gap.map(Math.abs)} color={t.inflation}
         sub={`largest deviation ${m.inflation_max_dev_pts.toFixed(1)} pt${run.scenario.closed ? ', after the rule is fully on' : ''}`}
-        delta={<Delta now={m.inflation_rmse_pts} ref={rm?.inflation_rmse_pts} unit="pt" label={refName}/>}/>
-      <Kpi t={t} label="Inflation at the end" value={m.inflation_end_pct.toFixed(2)} unit="%" spark={run.series['I(CPI_filtered)'].values} color={t.inflation}
-        sub={`target ${run.scenario.target_pct} %`} delta={<Delta now={m.inflation_end_pct} ref={rm?.inflation_end_pct} unit="pt" label={refName}/>}/>
-      <Kpi t={t} label="Policy rate range" value={`${m.rate_min_pct.toFixed(2)}–${m.rate_max_pct.toFixed(2)}`} unit="%" spark={run.series['I(R)'].values} color={t.rate}
-        delta={<Delta now={m.rate_max_pct - m.rate_min_pct} ref={rm && rm.rate_max_pct - rm.rate_min_pct} unit="pt width" label={refName}/>}/>
-      <Kpi t={t} label="Real GDP growth" value={m.gdp_growth_pct_per_year.toFixed(2)} unit="%/yr" spark={run.series['I(GDP_real)'].values} color={t.real}
-        sub={`run took ${run.seconds} s`} delta={<Delta now={m.gdp_growth_pct_per_year} ref={rm?.gdp_growth_pct_per_year} unit="pt" label={refName}/>}/>
+        delta={<Delta now={m.inflation_rmse_pts} ref={rm?.inflation_rmse_pts} unit="pt" label={refName}/>}/></Loc>
+      <Loc {...loc} k="I(CPI_filtered)"><Kpi t={t} label="Inflation at the end" value={m.inflation_end_pct.toFixed(2)} unit="%" spark={run.series['I(CPI_filtered)'].values} color={t.inflation}
+        sub={`target ${run.scenario.target_pct} %`} delta={<Delta now={m.inflation_end_pct} ref={rm?.inflation_end_pct} unit="pt" label={refName}/>}/></Loc>
+      <Loc {...loc} k="I(R)"><Kpi t={t} label="Policy rate range" value={`${m.rate_min_pct.toFixed(2)}–${m.rate_max_pct.toFixed(2)}`} unit="%" spark={run.series['I(R)'].values} color={t.rate}
+        delta={<Delta now={m.rate_max_pct - m.rate_min_pct} ref={rm && rm.rate_max_pct - rm.rate_min_pct} unit="pt width" label={refName}/>}/></Loc>
+      <Loc {...loc} k="I(GDP_real)"><Kpi t={t} label="Real GDP growth" value={m.gdp_growth_pct_per_year.toFixed(2)} unit="%/yr" spark={run.series['I(GDP_real)'].values} color={t.real}
+        sub={`run took ${run.seconds} s`} delta={<Delta now={m.gdp_growth_pct_per_year} ref={rm?.gdp_growth_pct_per_year} unit="pt" label={refName}/>}/></Loc>
     </div>
 
-    <div className="panel">
+    <Loc {...loc} k="I(CPI_filtered)" className="panel">
       <Chart title="Inflation gap: inflation − target" unit="points" markers={markers} lines={gapLines} shapes={tolerance} hoverFormat=".2f"
         note="Red: above target, blue: below. The grey band is ±1 point around the target."/>
-    </div>
+    </Loc>
     <div className="grid2">
-      <div className="panel"><Chart title="Inflation" unit="%" markers={markers} lines={lines('I(CPI_filtered)', [{ name: 'target', x: run.years, y: target, color: t.ink2, dash: 'dot', width: 1.5 }])}/></div>
-      <div className="panel"><Chart title="Interest rates along the chain" unit="%" markers={markers} lines={rateLines} hoverFormat=".2f"
-        note="Policy → wholesale → retail loan rate → long-term yield: one orange, darker further from the central bank."/></div>
+      <Loc {...loc} k="I(CPI_filtered)" className="panel"><Chart title="Inflation" unit="%" markers={markers} lines={lines('I(CPI_filtered)', [{ name: 'target', x: run.years, y: target, color: t.ink2, dash: 'dot', width: 1.5 }])}/></Loc>
+      <Loc {...loc} k="I(R)" className="panel"><Chart title="Interest rates along the chain" unit="%" markers={markers} lines={rateLines} hoverFormat=".2f"
+        note="Policy → wholesale → retail loan rate → long-term yield: one orange, darker further from the central bank."/></Loc>
     </div>
 
     <div className="panel">
@@ -105,11 +106,11 @@ export function SimView({ cat, run, compared, markers, extra, setExtra }:
         <label className="check"><input type="checkbox" checked={indexed} onChange={e => setIndexed(e.target.checked)}/>Compare sizes (levels as index, start = 100; rates as change in points; one scale)</label>
       </div>
       <div className="chain">
-        {CHAIN.map((c, i) => <div key={c.key} className="chain-step">
+        {CHAIN.map((c, i) => <Loc {...loc} key={c.key} k={c.key} className="chain-step">
           <span className="chain-no">{i + 1}</span>
           <Chart compact height={150} title={`${run.series[c.key].label}`} unit={unitOf(c.key)} markers={markers} lines={lines(c.key, [], tf(c.key))}
             note={c.step} yRange={!isPct(c.key) ? chainRange.level : RATE_KEYS.includes(c.key) ? chainRange.pct : undefined}/>
-        </div>)}
+        </Loc>)}
       </div>
     </div>
 
@@ -117,9 +118,9 @@ export function SimView({ cat, run, compared, markers, extra, setExtra }:
       <h3>Balance sheets: banks and government</h3>
       <p className="muted note">Stocks of the model. With "Compare sizes" on, they share one index scale. Leverage has its target Φ{phi != null ? ` = ${phi}` : ''} as a reference line.</p>
       <div className="grid2 tight">
-        {BALANCE.map(k => <Chart key={k} compact height={170} title={run.series[k].label} unit={k === 'I(Leverage)' ? 'ratio' : unitOf(k)} markers={markers}
+        {BALANCE.map(k => <Loc {...loc} key={k} k={k}><Chart compact height={170} title={run.series[k].label} unit={k === 'I(Leverage)' ? 'ratio' : unitOf(k)} markers={markers}
           yRange={k === 'I(Leverage)' ? undefined : balRange}
-          lines={lines(k, k === 'I(Leverage)' && phi != null ? [{ name: `target Φ = ${phi}`, x: run.years, y: run.years.map(() => phi), color: t.ink2, dash: 'dot', width: 1.4 }] : [], k === 'I(Leverage)' ? undefined : tf(k))}/>)}
+          lines={lines(k, k === 'I(Leverage)' && phi != null ? [{ name: `target Φ = ${phi}`, x: run.years, y: run.years.map(() => phi), color: t.ink2, dash: 'dot', width: 1.4 }] : [], k === 'I(Leverage)' ? undefined : tf(k))}/></Loc>)}
       </div>
     </div>
 
@@ -127,9 +128,15 @@ export function SimView({ cat, run, compared, markers, extra, setExtra }:
       <label className="pick">More signals <select value={extra} onChange={e => setExtra(e.target.value)}>
         {cat.series.map(x => <option key={x.key} value={x.key}>{x.label}</option>)}
       </select></label>
-      <Chart title={run.series[extra].label} unit={run.series[extra].unit} markers={markers} lines={lines(extra)}/>
+      <Loc {...loc} k={extra}><Chart title={run.series[extra].label} unit={run.series[extra].unit} markers={markers} lines={lines(extra)}/></Loc>
     </div>
   </>;
+}
+
+// A chart or tile that shows one signal: clicking it shows where that signal sits in the circuit map (centre column).
+function Loc({ k, children, className = '', onLocate, located }: { k: string; children: React.ReactNode; className?: string; onLocate?: (key: string) => void; located?: string }) {
+  if (!onLocate) return <div className={className}>{children}</div>;
+  return <div className={`locatable ${className}${located === k ? ' located' : ''}`} onClick={() => onLocate(k)} title="Click: show where this is in the circuit">{children}</div>;
 }
 
 function Kpi({ t, label, value, unit, sub, spark, color, delta }: { t: Theme; label: string; value: string; unit: string; sub?: string; spark: number[]; color: string; delta?: React.ReactNode }) {
