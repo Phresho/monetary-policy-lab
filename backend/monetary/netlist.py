@@ -84,9 +84,7 @@ def set_policy(lines: list[str], p: Policy) -> None:
         if value is not None:
             set_param(lines, name, value)
     if p.derivative == "filtered":
-        new = PI_OLD.replace("limit(Kd*I(CPI_filtered)-I(Target_CPI)*(time>t_start), -0.02, 0.02)",
-                             "limit(Kd*(I(CPI_filtered)-I(Target_CPI)-I(PI_D))/tau_Dfilt*(time>t_start), -0.02, 0.02)")
-        _replace(lines, PI_OLD, new)
+        _replace(lines, PI_OLD, PI_FILTERED)
         i = _index(lines, "B_PI ")
         lines.insert(i + 1, PI_D_LINE)
         j = next(k for k, l in enumerate(lines) if l.lower().startswith(".param") and "kp=" in l.lower())
@@ -95,7 +93,27 @@ def set_policy(lines: list[str], p: Policy) -> None:
         raise ValueError(f"derivative: {p.derivative!r}")
 
 
+def split_rule(lines: list[str]) -> None:
+    """Write the rule B_PI = max(-0.005, R_star + P + I + D) as four lines: each part its own source, so every part's
+    share of the control effort is a trace (I(PI_P), I(PI_I), I(PI_Dterm)); B_PI adds them. The same rule, so the run
+    is the same. Used for the app's runs (scenario.build); nl.build itself stays the netlist (and the LTspice export)."""
+    i = _index(lines, "B_PI ")
+    d = {PI_OLD: PI_D_NETLIST, PI_FILTERED: PI_D_FILT}.get(lines[i])
+    if d is None:
+        raise ValueError(f"B_PI changed in the model: {lines[i]!r}")
+    lines[i] = PI_SPLIT
+    lines[i + 1:i + 1] = [f"B§PI_P 0 0 I={PI_P}", f"B§PI_I 0 0 I={PI_I}", f"B§PI_Dterm 0 0 I={d}"]
+
+
 PI_D_LINE = "B§PI_D 0 0 I=idt((I(CPI_filtered)-I(Target_CPI)-I(PI_D))/tau_Dfilt)"  # derivative filter state x
+# the parts of the rule B_PI (PI_OLD = max(-0.005, R_star + P + I + D)); D as in the netlist or filtered
+PI_P = "Kp*(I(CPI_filtered)-I(Target_CPI))"
+PI_I = "limit(Ki*idt((I(CPI_filtered)-I(Target_CPI))*(time>t_start)), -0.03, 0.03)"
+PI_D_NETLIST = "limit(Kd*I(CPI_filtered)-I(Target_CPI)*(time>t_start), -0.02, 0.02)"
+PI_D_FILT = "limit(Kd*(I(CPI_filtered)-I(Target_CPI)-I(PI_D))/tau_Dfilt*(time>t_start), -0.02, 0.02)"
+PI_SPLIT = "B_PI n_pi 0 V =max(-0.005,R_star+I(PI_P)+I(PI_I)+I(PI_Dterm))"
+assert PI_OLD == f"B_PI n_pi 0 V =max(-0.005,R_star+ {PI_P}+{PI_I}+{PI_D_NETLIST})"
+PI_FILTERED = PI_OLD.replace(PI_D_NETLIST, PI_D_FILT)
 SAVINGS_OLD = "B§Savings_Account_Balance 0 0 I= IF(time < 0.0001, 0, q_S0 + idt(I(Deposit)))"
 CPI_OLD = "B§CPI 0 0 I = IF(time<0.1, pi_bar, 120*ddt(ln(max(I(P),1m))))"
 CPIF_OLD = "B§CPI_filtered 0 0 I = if(time<2,0.02,idt((I(CPI) - I(CPI_filtered)) / {tau}, I(CPI)))"

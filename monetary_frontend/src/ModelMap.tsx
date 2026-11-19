@@ -22,6 +22,8 @@ interface Txt { x: number; y: number; align: string; size: number; text: string 
 interface Flow { element: string; ref: string; kind: string; from: string; to: string; node: string; steady: number }
 export interface MapData { bounds: number[]; wires: number[][]; wire_nodes: (string | null)[]; flags: { x: number; y: number; name: string; ground: boolean }[]; rects: Rect[]; sectors: string[]; texts: Txt[]; elements: El[]; flows: Flow[] }
 interface Trace { element: string; trace: string; years: number[]; values: number[] }
+// a wire crossing a box edge: f (flow, with its name) on a flow wire; ret: the nearest return wire on the same edge
+type Port = { x: number; y: number; node: string; box: string; ground: boolean; gap: number; vert: boolean; name: string; ret?: { x: number; y: number } }
 type Box = { x: number; y: number; w: number; h: number };
 type VB = [number, number, number, number];
 
@@ -44,18 +46,19 @@ const DRAWING: Record<string, string> = { Controller: 'Central Bank', Output: 'C
 const drawingOf = (id: string) => DRAWING[id] ?? (id === PLANT || id === 'Target setting' || id === 'Rate path' ? undefined : id);
 const blockOfDrawing = (title: string) => Object.entries(DRAWING).find(([, v]) => v === title)?.[0] ?? title;
 const TITLE: Record<string, [string, string]> = {   // title and subtitle, as in the figure
-  'Target setting': ['Target setting', '(Governing Council)'],
-  Controller: ['Controller', '(ECB)'],
+  'Target setting': ['Mandate', '(Governing Council · π*)'],
+  Controller: ['Central bank', '(ECB · policy rule)'],
   'Rate path': ['Rate path', '(given, open loop)'],
-  [PLANT]: ['Plant', '(Economy) · NAWM-II multiport'],
-  Output: ['Output', '(Inflation)'],
+  [PLANT]: ['Eurozone-Economy', '(NAWM-II multiport)'],
+  Output: ['Inflation measurement', '(CPI)'],
 };
+const disp = (id: string) => TITLE[id]?.[0] ?? id;   // the name shown for a block (the ids stay as in the code)
 const INFO: Record<string, { role: string; about: string; element?: string }> = {
-  'Target setting': { role: 'setpoint', element: 'B§Target_CPI', about: 'The Governing Council sets the inflation target π* (Target_CPI in the drawing).' },
-  Controller: { role: 'controller', about: 'The ECB: the policy rule B_PI and the rate smoothing R15·C8 (207 time units) set the policy rate r, the input u of the plant (closed loop).' },
-  'Rate path': { role: 'open-loop input', element: 'B§R', about: 'In open loop the policy rate r follows a given path (base rate, then a step: the sliders), and the controller is out of the loop.' },
+  'Target setting': { role: 'mandate (setpoint)', element: 'B§Target_CPI', about: 'The Governing Council sets the inflation target π* (Target_CPI in the drawing).' },
+  Controller: { role: 'controller', about: 'The central bank (ECB): the policy rule B_PI and the rate smoothing R15·C8 (207 time units) set the policy rate r, the input u of the plant (closed loop).' },
+  'Rate path': { role: 'open-loop input', element: 'B§R', about: 'In open loop the policy rate r follows a given path (base rate, then a step: the sliders), and the central bank’s rule is out of the loop.' },
   [PLANT]: { role: 'plant', about: 'The economy as a multiport (NAWM-II): households, banks, the fiscal authority, the non-financial corporations and the foreign sector, connected by port pairs. Open it for the agents.' },
-  Output: { role: 'output (sensor)', about: 'Measures the price level P, inflation CPI = 120·d ln P/dt and its filtered value π, which is fed back to Σ (CPI values in the drawing).' },
+  Output: { role: 'output (sensor)', about: 'Inflation measurement: measures the price level P, inflation CPI = 120·d ln P/dt and its filtered value π, which is fed back to Σ (CPI values in the drawing).' },
   Households: { role: 'agent', about: 'Income, consumption, savings and deposits, bonds, labour supply and the taxes households pay.' },
   Banks: { role: 'agent', about: 'Wholesale and retail banks. Open it for the two.' },
   'Wholesale banks': { role: 'sub-agent of Banks', about: 'Bank balance sheet: deposits, wholesale loans, bond holdings, net worth and dividends.' },
@@ -85,14 +88,26 @@ const CTRL: Box = { x: 460, y: 300, w: 250, h: 172 };
 const RATE: Box = { x: 460, y: 520, w: 250, h: 104 };
 const SWITCH_X = 860;   // where u is taken from the controller (closed) or the rate path (open)
 const P_CLOSED: Box = { x: 1080, y: 256, w: 440, h: 260 };
-const outputBox = (p: Box): Box => ({ x: p.x + p.w + 200, y: CTRL.y + CTRL.h / 2 - 60, w: 240, h: 120 });
+const YC = CTRL.y + CTRL.h / 2;   // the loop's axis: e, u, P run along it
+const outputBox = (p: Box): Box => ({ x: p.x + p.w + 200, y: YC - 60, w: 240, h: 120 });
+// The PID figure of the central bank (TikZ cm x 100, y up): its viewBox, and its scale when the block is opened.
+const PID = { x0: -545, y0: -185, w: 1460, h: 370, s: 0.75 };
+const PID_VB = `${PID.x0} ${PID.y0} ${PID.w} ${PID.h}`;
+// The opened central bank is drawn in place, its figure on the loop's axis: e enters at its left edge, r leaves at its
+// right edge, and everything right of it (switch, economy, inflation measurement) moves right by `shift`.
+const CTRL_OPEN: Box = { x: CTRL.x, y: YC + PID.y0 * PID.s - HEAD - 10, w: PID.w * PID.s, h: HEAD + 10 + PID.h * PID.s + 62 };
+type LoopLy = { ctrl: Box; rate: Box; switchX: number; pClosed: Box; shift: number };
+const loopLy = (ctrlOpen: boolean): LoopLy => {
+  const c = ctrlOpen ? CTRL_OPEN : CTRL, shift = c.w - CTRL.w;
+  return { ctrl: c, rate: { ...RATE, y: c.y + c.h + 48 }, switchX: SWITCH_X + shift, pClosed: { ...P_CLOSED, x: P_CLOSED.x + shift }, shift };
+};
 type R4 = { x1: number; y1: number; x2: number; y2: number };
 // The opened plant is the drawing itself at one scale K: every box at its exact place, the wires between them as drawn.
 const K = 0.31, MARGIN = 140;
 type View = { x: number; y: number; w: number; h: number };
 type Geo = { VIEW: View; P_OPEN: Box; mapRect: (r: R4) => Box; inView: (x: number, y: number) => boolean };
-function makeGeo(v: View): Geo {
-  const P_OPEN: Box = { x: 1080, y: 120, w: v.w * K, h: v.h * K + HEAD };
+function makeGeo(v: View, shift = 0): Geo {
+  const P_OPEN: Box = { x: 1080 + shift, y: 120, w: v.w * K, h: v.h * K + HEAD };
   return { VIEW: v, P_OPEN,
     mapRect: r => ({ x: P_OPEN.x + (r.x1 - v.x) * K, y: P_OPEN.y + HEAD + (r.y1 - v.y) * K, w: (r.x2 - r.x1) * K, h: (r.y2 - r.y1) * K }),
     inView: (x, y) => x >= v.x && x <= v.x + v.w && y >= v.y && y <= v.y + v.h };
@@ -151,7 +166,7 @@ const inPlant = (id: string) => within(PLANT, id);
 interface DashVar { name: string; ref: string; group: string; expr: string; constant?: boolean; box: string | null; readers: { name: string; ref: string; sector: string | null }[] }
 type DashVals = { years: number[]; series: Record<string, number[]> };
 const T_END = 13.33;
-type Sel = { type: 'block' | 'port' | 'node' | 'el' | 'instr'; id: string; q?: 'e' | 'f' };
+type Sel = { type: 'block' | 'port' | 'node' | 'el' | 'instr' | 'pid'; id: string; q?: 'e' | 'f' };
 const fmt = (v: number) => !isFinite(v) ? '–' : Math.abs(v) >= 100 ? v.toFixed(1) : Math.abs(v) >= 1 ? v.toFixed(3) : v.toPrecision(3);
 
 // transfer function between two picked flows (POST /api/transfer): an extra flow into the first, the second's current
@@ -164,49 +179,71 @@ const SIGNAL_NAME: Record<string, string> = { 'B§R': 'u = policy rate r', 'B§C
 const LOGX = { type: 'log', title: { text: 'frequency (rad/yr)' }, exponentformat: 'power' };
 const cycTxt = (v: number) => v >= 1 ? `${v.toFixed(1)} yr` : v >= 1 / 12 ? `${(v * 12).toFixed(1)} months` : `${(v * 365).toFixed(0)} days`;
 
-// The controller as a classic PID (after the user's TikZ figure): e = π_f − π* splits into P, I and D, a bus sums
-// them into Σ with the neutral rate r*, the effective lower bound (the max(−0.5 %, …) of B_PI) clips the result, and
-// the smoothing R15·C8 gives the policy rate r. Units: the TikZ cm × 100, y up.
-function PidFigure({ sc, t, pick, onPart }: { sc?: Scenario; t: Theme; pick: (id: string) => string; onPart: (part: string, ctrl: boolean) => void }) {
+// The central bank's rule as a classic PID (after the user's TikZ figure): e = π_f − π* splits into P, I and D with the
+// gains filled in, a bus sums them into Σ with the neutral rate r*, the effective lower bound (the max(−0.5 %, …) of
+// B_PI) clips the result, and the smoothing R15·C8 gives the policy rate r. Units: the TikZ cm × 100, y up. Each part
+// is clickable: its share of the control effort over the run opens in the details panel; `now` holds each part's
+// value (in %) at the moment shown on the time bar.
+type PidNow = Partial<Record<'e' | 'P' | 'I' | 'D' | 'rstar' | 'sat' | 'smooth' | 'r', number>>;
+function PidFigure({ sc, t, pick, onPart, now, at, active }: { sc?: Scenario; t: Theme; pick: (id: string) => string; onPart: (part: string, ctrl: boolean) => void; now?: PidNow; at?: number; active?: string }) {
   const Y = (y: number) => -y * 100, X = (x: number) => x * 100;
   const ink = t.ink, red = '#c0392b', box = { fill: t.panel, stroke: ink, strokeWidth: 1.6 };
-  const k = (v: number | undefined) => v == null ? '' : ` = ${Number(v.toPrecision(3))}`;
+  const v = (x: number | undefined) => x == null ? '–' : String(Number(x.toPrecision(3)));
+  const pct = (id: keyof PidNow) => now?.[id] == null ? '' : `${now[id]! >= 0 ? '+' : '−'}${Math.abs(now[id]!).toFixed(2)} %`;
   const filt = sc?.derivative !== 'netlist';
-  const part = (id: string, node: ReactNode) => <g className={'pid-part' + pick(id)} data-pid={id} onClick={e => { e.stopPropagation(); onPart(id, e.ctrlKey || e.metaKey); }}>{node}</g>;
+  const part = (id: string, node: ReactNode) => <g className={'pid-part' + pick(id) + (active === id ? ' on' : '')} data-pid={id} onClick={e => { e.stopPropagation(); onPart(id, e.ctrlKey || e.metaKey); }}>
+    <title>Click: the share of {id === 'e' ? 'the error' : id === 'r' ? 'the policy rate' : 'this part'} in the control effort over the run</title>{node}</g>;
   const arrow = (d: string) => <path d={d} fill="none" stroke={ink} strokeWidth={1.6} markerEnd="url(#pid-ah)"/>;
-  const pidBox = (y: number, label: ReactNode, sub: string, id: string) => part(id, <>
-    <rect x={X(-1.3)} y={Y(y) - 37} width={260} height={74} {...box}/>
-    <text x={0} y={Y(y) - 4} textAnchor="middle" fontSize={26} fill={ink}>{label}</text>
-    <text x={0} y={Y(y) + 27} textAnchor="middle" fontSize={17} fill={t.ink2}>{sub}</text></>);
+  const pidBox = (y: number, main: ReactNode, sub: ReactNode, id: 'P' | 'I' | 'D') => part(id, <>
+    <rect x={X(-1.3)} y={Y(y) - 47} width={260} height={94} {...box}/>
+    <text x={0} y={Y(y) - 14} textAnchor="middle" fontSize={25} fill={ink}>{main}</text>
+    <text x={0} y={Y(y) + 12} textAnchor="middle" fontSize={15} fill={t.ink2}>{sub}</text>
+    <text x={0} y={Y(y) + 36} textAnchor="middle" fontSize={16} fontWeight={650} fill={t.ink}>{pct(id)}</text></>);
   return <g className="pid">
     <defs><marker id="pid-ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0 0 L10 5 L0 10 Z" fill={ink}/></marker></defs>
-    {part('e', <>{arrow(`M${X(-5.3)} 0 H${X(-2)}`)}<path d={`M${X(-5.3)} -14 H${X(-2)} V14 H${X(-5.3)} Z`} fill="transparent"/>
-      <text x={X(-4.7)} y={-10} fontSize={24} fill={ink}>e = π<tspan fontSize={16} dy={6}>f</tspan><tspan dy={-6}> − π*</tspan></text></>)}
-    <path d={`M${X(-1.95)} ${Y(1.15)} V${Y(-1.15)}`} stroke={ink} strokeWidth={1.6}/>
-    {arrow(`M${X(-1.95)} ${Y(1.15)} H${X(-1.3)}`)}{arrow(`M${X(-1.95)} 0 H${X(-1.3)}`)}{arrow(`M${X(-1.95)} ${Y(-1.15)} H${X(-1.3)}`)}
-    {pidBox(1.15, <>K<tspan fontSize={17} dy={5}>p</tspan><tspan dy={-5}> e</tspan></>, `Kp${k(sc?.kp)}`, 'P')}
-    {pidBox(0, <>K<tspan fontSize={17} dy={5}>i</tspan><tspan dy={-5}> ∫ e dσ</tspan></>, `Ki${k(sc?.ki)} · limited ±3 pt · from t₀`, 'I')}
-    {pidBox(-1.15, <>K<tspan fontSize={17} dy={5}>d</tspan><tspan dy={-5}> ė</tspan></>, filt ? `Kd${k(sc?.kd)} · filtered, τd${k(sc?.tau_d)} · ±2 pt` : `Kd${k(sc?.kd)} · on the level (netlist)`, 'D')}
-    <path d={`M${X(1.3)} ${Y(1.15)} H${X(2.15)} M${X(1.3)} 0 H${X(2.15)} M${X(1.3)} ${Y(-1.15)} H${X(2.15)} M${X(2.15)} ${Y(1.15)} V${Y(-1.15)}`} stroke={ink} strokeWidth={1.6} fill="none"/>
+    {part('e', <>{arrow(`M${X(-5.45)} 0 H${X(-2)}`)}<path d={`M${X(-5.45)} -16 H${X(-2)} V16 H${X(-5.45)} Z`} fill="transparent"/>
+      <text x={X(-4.7)} y={-12} fontSize={24} fill={ink}>e = π<tspan fontSize={16} dy={6}>f</tspan><tspan dy={-6}> − π*</tspan></text>
+      <text x={X(-4.7)} y={30} fontSize={16} fontWeight={650} fill={ink}>{pct('e')}</text></>)}
+    <path d={`M${X(-1.95)} ${Y(1.2)} V${Y(-1.2)}`} stroke={ink} strokeWidth={1.6}/>
+    {arrow(`M${X(-1.95)} ${Y(1.2)} H${X(-1.3)}`)}{arrow(`M${X(-1.95)} 0 H${X(-1.3)}`)}{arrow(`M${X(-1.95)} ${Y(-1.2)} H${X(-1.3)}`)}
+    {pidBox(1.2, <>{v(sc?.kp)} · e</>, <>K<tspan fontSize={11} dy={3}>p</tspan><tspan dy={-3}> · e  (K</tspan><tspan fontSize={11} dy={3}>p</tspan><tspan dy={-3}> = {v(sc?.kp)})</tspan></>, 'P')}
+    {pidBox(0, <>{v(sc?.ki)} · ∫ e dσ</>, <>K<tspan fontSize={11} dy={3}>i</tspan><tspan dy={-3}> ∫e dσ · limited ±3 pt · from t₀</tspan></>, 'I')}
+    {pidBox(-1.2, <>{v(sc?.kd)} · ė</>, filt ? <>K<tspan fontSize={11} dy={3}>d</tspan><tspan dy={-3}> ė · filtered τ = {v(sc?.tau_d)} · ±2 pt</tspan></> : <>K<tspan fontSize={11} dy={3}>d</tspan><tspan dy={-3}> · level (netlist) · ±2 pt</tspan></>, 'D')}
+    <path d={`M${X(1.3)} ${Y(1.2)} H${X(2.15)} M${X(1.3)} 0 H${X(2.15)} M${X(1.3)} ${Y(-1.2)} H${X(2.15)} M${X(2.15)} ${Y(1.2)} V${Y(-1.2)}`} stroke={ink} strokeWidth={1.6} fill="none"/>
     {arrow(`M${X(2.15)} 0 H${X(2.95 - 0.31)}`)}
     <circle cx={X(2.95)} cy={0} r={31} {...box}/><text x={X(2.95)} y={9} textAnchor="middle" fontSize={28} fill={ink}>Σ</text>
-    {arrow(`M${X(2.95)} ${Y(1.3)} V${Y(0.31)}`)}<text x={X(2.95)} y={Y(1.36)} textAnchor="middle" fontSize={24} fill={ink}>r*{sc ? ` = ${sc.r_star.toFixed(2)} %` : ''}</text>
+    {part('rstar', <>{arrow(`M${X(2.95)} ${Y(1.3)} V${Y(0.31)}`)}<path d={`M${X(2.6)} ${Y(1.75)} H${X(3.3)} V${Y(0.35)} H${X(2.6)} Z`} fill="transparent"/>
+      <text x={X(2.95)} y={Y(1.42)} textAnchor="middle" fontSize={23} fill={ink}>r*{sc ? ` = ${sc.r_star.toFixed(2)} %` : ''}</text></>)}
     {arrow(`M${X(2.95 + 0.31)} 0 H${X(4.4)}`)}
     {part('sat', <>
       <rect x={X(4.4)} y={-65} width={130} height={130} {...box}/>
       <path d={`M${X(4.5)} 0 H${X(5.4)} M${X(4.95)} -50 V50`} stroke={t.muted} strokeWidth={1}/>
       <path d={`M${X(4.45)} 30 H${X(4.72)} L${X(5.4)} -38`} stroke={red} strokeWidth={2.4} fill="none"/>
-      <text x={X(4.95)} y={92} textAnchor="middle" fontSize={20} fill={red}>r̲ = −0.5 %</text></>)}
+      <text x={X(4.95)} y={90} textAnchor="middle" fontSize={20} fill={red}>r̲ = −0.5 %</text>
+      <text x={X(4.95)} y={114} textAnchor="middle" fontSize={16} fontWeight={650} fill={ink}>{pct('sat')}</text></>)}
     {arrow(`M${X(5.7)} 0 H${X(6.45)}`)}
     {part('smooth', <>
       <rect x={X(6.45)} y={-37} width={150} height={74} {...box} strokeDasharray="6 4"/>
       <text x={X(7.2)} y={-2} textAnchor="middle" fontSize={21} fill={ink}>1/(1 + 207 s)</text>
       <text x={X(7.2)} y={26} textAnchor="middle" fontSize={16} fill={t.ink2}>smoothing R15·C8</text></>)}
-    {part('r', <>{arrow(`M${X(7.95)} 0 H${X(8.9)}`)}<path d={`M${X(7.95)} -14 H${X(8.9)} V14 H${X(7.95)} Z`} fill="transparent"/>
-      <text x={X(8.42)} y={-10} textAnchor="middle" fontSize={26} fill={ink}>r</text></>)}
+    {part('r', <>{arrow(`M${X(7.95)} 0 H${X(9.15)}`)}<path d={`M${X(7.95)} -16 H${X(9.15)} V16 H${X(7.95)} Z`} fill="transparent"/>
+      <text x={X(8.55)} y={-12} textAnchor="middle" fontSize={26} fill={ink}>r</text>
+      <text x={X(8.55)} y={32} textAnchor="middle" fontSize={16} fontWeight={650} fill={ink}>{pct('r')}</text></>)}
+    {at != null && now && <text x={X(-5.3)} y={Y(1.62)} fontSize={15} fill={t.ink2}>values at t = {at.toFixed(1)} yr (time bar)</text>}
   </g>;
 }
-const PID_VB = '-545 -180 1460 300';
+// What each part of the rule is, for the details panel (the series key of /api/controller/parts).
+const PID_PART: Record<string, { title: string; about: string; key: string }> = {
+  e: { title: 'Error e = π_f − π*', key: 'e', about: 'Filtered inflation minus the target: what the rule reacts to.' },
+  P: { title: 'Proportional part Kp·e', key: 'P', about: 'Reacts to the error now: Kp times the error.' },
+  I: { title: 'Integral part Ki·∫e', key: 'I', about: 'The error added up since t₀ (Ki times its integral), limited to ±3 points: it removes a gap that lasts.' },
+  D: { title: 'Derivative part Kd·ė', key: 'D', about: 'Reacts to how fast the error changes (filtered), limited to ±2 points.' },
+  rstar: { title: 'Neutral rate r*', key: 'r_star', about: 'The rate when inflation is on target: the base the other parts add to.' },
+  sat: { title: 'Effective lower bound', key: 'elb', about: 'max(−0.5 %, …): what the lower bound adds when r* + P + I + D falls below −0.5 %. Zero while the bound is not reached.' },
+  smooth: { title: 'Smoothing R15·C8', key: 'r', about: 'The policy rate follows the rule’s output with a time constant of 207 time units (1.7 years).' },
+  r: { title: 'Policy rate r', key: 'r', about: 'The output of the central bank: the rate the economy gets in closed loop (in open loop the rate path is used and this is what the rule would ask).' },
+};
+type Parts = { years: number[]; closed: boolean; series: Record<string, number[]> };
 
 // current along the drawn wires (POST /api/wireflow), positive in a segment's drawn direction
 type WireFlow = { years: number[]; segments: { w: number; p: number[]; node: string; i: number[] }[] };
@@ -216,7 +253,7 @@ const DOT_PERIODS = [100, 200, 400, 800, 1600];   // dot spacing in drawing unit
 // current moves its dots about one spacing per second.
 const DOT_TRAVEL = 400;
 
-export function ModelMap({ scenario, closed, run, busy = false, expectSec = 12, vars, locate }: { scenario: unknown; closed: boolean; run?: SavedRun; busy?: boolean; expectSec?: number; vars?: ReactNode; locate?: { key: string; seq: number } }) {
+export function ModelMap({ scenario, closed, run, busy = false, expectSec = 12, vars, locate, onLoop }: { scenario: unknown; closed: boolean; run?: SavedRun; busy?: boolean; expectSec?: number; vars?: ReactNode; locate?: { key: string; seq: number }; onLoop?: (closed: boolean) => void }) {
   const t = useTheme();
   const KIND = kindColor(t);
   const sc = scenario as Scenario | undefined;
@@ -240,6 +277,7 @@ export function ModelMap({ scenario, closed, run, busy = false, expectSec = 12, 
   const [tfBusy, setTfBusy] = useState(false);
   const [tfError, setTfError] = useState('');
   const [ctrlDrawing, setCtrlDrawing] = useState(false);   // the opened controller: PID figure (default) or the .asc drawing
+  const [parts, setParts] = useState<Parts>();             // each part of the rule over the run (the opened central bank)
   const tfBox = useRef<HTMLDivElement>(null);
   const [sel, setSel] = useState<Sel>();
   const [hover, setHover] = useState<string>();
@@ -285,6 +323,14 @@ export function ModelMap({ scenario, closed, run, busy = false, expectSec = 12, 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [scenarioKey, busy, run]);
   useEffect(() => setTfClosed(closed), [closed]);
+  const ctrlOpenNow = open.includes('Controller') && !ctrlDrawing;
+  useEffect(() => {   // the parts of the rule, once the central bank is opened (or a part is clicked) and a run exists
+    if (busy || !run || !(ctrlOpenNow || sel?.type === 'pid')) return;
+    let live = true;
+    api<Parts>('/controller/parts', scenario).then(r => { if (live) setParts(r); }).catch(() => { if (live) setParts(undefined); });
+    return () => { live = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scenarioKey, busy, run, ctrlOpenNow, sel?.type]);
   useEffect(() => {
     if (tfPick.length < 2) { setTf(undefined); setTfError(''); return; }
     let live = true; setTfBusy(true); setTfError('');
@@ -344,17 +390,19 @@ export function ModelMap({ scenario, closed, run, busy = false, expectSec = 12, 
     const x = tNow / (wf.years[1] - wf.years[0]), j = Math.min(Math.floor(x), q.length - 2), f = Math.min(Math.max(x - j, 0), 1);
     return q[j] + (q[j + 1] - q[j]) * f;
   };
-  const geo = useMemo(() => m && rects.Households ? makeGeo(plantView(m, rects, inPlant)) : GEO0, [m, rects]);
-  const layoutFor = useCallback((o: string[]) => ({ boxes: o.includes(PLANT)
-    ? { [PLANT]: geo.P_OPEN, ...Object.fromEntries(Object.entries(rects).filter(([k]) => inPlant(k)).map(([k, r]) => [k, geo.mapRect(r)])) } as Record<string, Box>
-    : {} as Record<string, Box> }), [rects, geo]);
+  const pview = useMemo(() => m && rects.Households ? plantView(m, rects, inPlant) : GEO0.VIEW, [m, rects]);
+  const geoFor = useCallback((o: string[]) => makeGeo(pview, loopLy(o.includes('Controller')).shift), [pview]);
+  const geo = useMemo(() => geoFor(open), [geoFor, open]);
+  const layoutFor = useCallback((o: string[]) => { const g = geoFor(o); return { ly: loopLy(o.includes('Controller')), boxes: o.includes(PLANT)
+    ? { [PLANT]: g.P_OPEN, ...Object.fromEntries(Object.entries(rects).filter(([k]) => inPlant(k)).map(([k, r]) => [k, g.mapRect(r)])) } as Record<string, Box>
+    : {} as Record<string, Box> }; }, [rects, geoFor]);
   const lay = useMemo(() => layoutFor(open), [layoutFor, open]);
-  const loopLeaf = open.find(o => o === 'Controller' || o === 'Output');   // controller / output: shown over a scrim
+  const loopLeaf = open.find(o => o === 'Output');   // the inflation measurement opens over a scrim; the central bank opens in place
   const boxIn = useCallback((id: string, l: ReturnType<typeof layoutFor>, po: boolean): Box => {
     if (id === 'Target setting') return TARGET;
-    if (id === 'Controller') return CTRL;
-    if (id === 'Rate path') return RATE;
-    const P = po ? (l.boxes[PLANT] ?? P_CLOSED) : P_CLOSED;
+    if (id === 'Controller') return l.ly.ctrl;
+    if (id === 'Rate path') return l.ly.rate;
+    const P = po ? (l.boxes[PLANT] ?? l.ly.pClosed) : l.ly.pClosed;
     if (id === PLANT) return P;
     if (id === 'Output') return outputBox(P);
     return l.boxes[id] ?? { x: 0, y: 0, w: 10, h: 10 };
@@ -362,10 +410,9 @@ export function ModelMap({ scenario, closed, run, busy = false, expectSec = 12, 
   const boxOf = useCallback((id: string) => boxIn(id, lay, plantOpen), [boxIn, lay, plantOpen]);
   // the controller and the output open over the loop (their circuit grows around the block's centre)
   const expanded = useCallback((id: string): Box => {
-    const b = boxOf(id), pid = id === 'Controller' && !ctrlDrawing;
-    const w = pid ? 1180 : Math.max(b.w * 2.8, 760), h = pid ? 470 : Math.max(b.h * 2.8, 500);
+    const b = boxOf(id), w = Math.max(b.w * 2.8, 760), h = Math.max(b.h * 2.8, 500);
     return { x: Math.max(-200, b.x + b.w / 2 - w / 2), y: Math.max(-100, b.y + b.h / 2 - h / 2), w, h };
-  }, [boxOf, ctrlDrawing]);
+  }, [boxOf]);
   const visible = useCallback((id: string): string => { let v = id; while (PARENT[v] && !open.includes(PARENT[v])) v = PARENT[v]; return v; }, [open]);
   const shownBlocks = useMemo(() => {
     const out = [...LOOP];
@@ -374,8 +421,9 @@ export function ModelMap({ scenario, closed, run, busy = false, expectSec = 12, 
     return out;
   }, [open]);
   // the dashed region around controller, rate path and plant, and the feedback line below it
-  const regionOf = (p: Box): Box => { const y1 = Math.min(CTRL.y, p.y) - 60, y2 = Math.max(RATE.y + RATE.h, p.y + p.h) + 80; return { x: CTRL.x - 40, y: y1, w: p.x + p.w + 40 - (CTRL.x - 40), h: y2 - y1 }; };
-  const loopView = (p: Box): Box => { const r = regionOf(p), o = outputBox(p); return { x: TARGET.x - 20, y: r.y - 230, w: o.x + o.w + 40 - TARGET.x, h: r.h + 400 }; };
+  // the region around central bank, rate path and economy (no longer drawn; it sets where the feedback line runs)
+  const regionOf = (p: Box, ly: LoopLy): Box => { const y1 = Math.min(ly.ctrl.y, p.y) - 60, y2 = Math.max(ly.rate.y + ly.rate.h, p.y + p.h) + 80; return { x: ly.ctrl.x - 40, y: y1, w: p.x + p.w + 40 - (ly.ctrl.x - 40), h: y2 - y1 }; };
+  const loopView = (p: Box, ly: LoopLy): Box => { const r = regionOf(p, ly), o = outputBox(p); return { x: TARGET.x - 20, y: r.y - 230, w: o.x + o.w + 40 - TARGET.x, h: r.h + 400 }; };
 
   // ---------------------------------------------------------------- camera
   const view = useCallback((b: Box, k = 0.06): VB => {
@@ -419,8 +467,12 @@ export function ModelMap({ scenario, closed, run, busy = false, expectSec = 12, 
   const pathTo = (id: string): string[] => { const p: string[] = []; let v: string | undefined = id; while (v) { p.unshift(v); v = PARENT[v]; } return p; };
   const focusBoxOf = (id: string | undefined, o: string[]): Box => {
     const l = layoutFor(o), po = o.includes(PLANT);
-    if (!id) return loopView(po ? boxIn(PLANT, l, po) : P_CLOSED);
-    if (id === PLANT) return loopView(boxIn(PLANT, l, po));
+    if (id === 'Controller') {   // the opened central bank with its neighbours: mandate, Σ, rate path and the switch
+      const c = l.ly.ctrl, r = l.ly.rate;
+      return { x: TARGET.x - 20, y: c.y - 40, w: l.ly.switchX + 160 - TARGET.x, h: r.y + r.h + 60 - (c.y - 40) };
+    }
+    if (!id) return loopView(boxIn(PLANT, l, po), l.ly);
+    if (id === PLANT) return loopView(boxIn(PLANT, l, po), l.ly);
     if (!inPlant(id) && !CHILDREN[id]) return expanded(id);
     return boxIn(id, l, po);
   };
@@ -438,18 +490,58 @@ export function ModelMap({ scenario, closed, run, busy = false, expectSec = 12, 
   }
   const trail = focus ? pathTo(focus).filter(x => open.includes(x)) : [];
   function crumb(i: number) {   // the first crumb closes everything; the others fly to that level
-    if (i === 0) { setOpen([]); setFocus(undefined); setSel(undefined); flyTo(view(loopView(P_CLOSED), 0.04)); return; }
+    if (i === 0) { setOpen([]); setFocus(undefined); setSel(undefined); flyTo(view(loopView(P_CLOSED, loopLy(false)), 0.04)); return; }
     setFocus(trail[i - 1]); flyTo(view(focusBoxOf(trail[i - 1], open), 0.04));
   }
   function showWhole(on: boolean) {
     setWhole(on); setSel(undefined); cancelAnimationFrame(anim.current);
     if (on && m) { const b = m.bounds; setVb([b[0], b[1], b[2] - b[0], b[3] - b[1]]); } else setVb(view(focusBoxOf(focus, open), 0.03));
   }
-  useEffect(() => { if (m) setVb(view(loopView(P_CLOSED), 0.04)); }, [m]);   // start: the feedback loop
+  useEffect(() => { if (m) setVb(view(loopView(P_CLOSED, loopLy(false)), 0.04)); }, [m]);   // start: the feedback loop
 
   // ---------------------------------------------------------------- the plant as drawn
   // Visible plant boxes that are closed cover their part of the circuit. Port marks sit where a wire crosses the edge
   // of a visible box (closed or open): f on a flow wire, a small ring on a return (ground) wire.
+  // Where wires cross the edge of a box. A flow port carries the name of its flow (the element that carries the current
+  // between the two agents), and the return (ground) wire that crosses the same edge nearest to it: the effort e is
+  // the voltage between the two wires, so its mark sits on a line between them (as in the housing app).
+  const findPorts = useCallback((wires: { w: number[]; node: string | null }[], boxes: string[]): Port[] => {
+    if (!m) return [];
+    const ports: Port[] = [];
+    const seen = new Set<string>();
+    for (const id of boxes) {
+      const r = rects[id]; if (!r) continue;
+      for (const { w, node } of wires) {
+        if (!node) continue;
+        for (const [x, y] of crossings([w[0], w[1]], [w[2], w[3]], r)) {
+          const k = `${Math.round(x)}|${Math.round(y)}`; if (seen.has(k)) continue; seen.add(k);
+          if (ports.some(q => q.node === node && Math.hypot(q.x - x, q.y - y) < 160)) continue;   // the same wire at two close edges
+          ports.push({ x, y, node, box: id, ground: node === '0', gap: Infinity, vert: Math.abs(x - r.x1) < 1 || Math.abs(x - r.x2) < 1, name: '' });
+        }
+      }
+    }
+    for (const q of ports) for (const o of ports) if (o !== q) q.gap = Math.min(q.gap, Math.hypot(o.x - q.x, o.y - q.y));
+    const carriers = ['inductor', 'behavioural current', 'current source'];
+    for (const q of ports) {
+      if (q.ground) continue;
+      const near = (a: string) => a === q.box || within(q.box, a) || within(a, q.box);
+      const f = m.flows.find(x => x.node === q.node && (near(x.from) || near(x.to)));
+      const el = f ? undefined : m.elements.find(e => e.nodes.includes(q.node) && !!e.sector && near(e.sector) && carriers.includes(e.kind));
+      q.name = f ? f.ref : el ? el.ref : q.node;
+      const back = ports.filter(o => o.ground && o.box === q.box && o.vert === q.vert && Math.hypot(o.x - q.x, o.y - q.y) < 900)
+        .sort((a, b) => Math.hypot(a.x - q.x, a.y - q.y) - Math.hypot(b.x - q.x, b.y - q.y))[0];
+      if (back) q.ret = { x: back.x, y: back.y };
+    }
+    return ports;
+  }, [m, rects]);
+  // the colour of a node: its hub agent (the agent in every flow on that node)
+  const hubOf = useMemo(() => {
+    const hub: Record<string, string> = {}, byNode: Record<string, Flow[]> = {};
+    for (const f of m?.flows ?? []) (byNode[f.node] ??= []).push(f);
+    for (const [n, fl] of Object.entries(byNode)) { const common = [fl[0].from, fl[0].to].find(a => fl.every(f => f.from === a || f.to === a)); if (common) hub[n] = common; }
+    return hub;
+  }, [m]);
+  const wholePorts = useMemo(() => whole && m ? findPorts(m.wires.map((w, i) => ({ w, node: m.wire_nodes[i] })), Object.keys(rects)) : [], [whole, m, rects, findPorts]);
   const plantDraw = useMemo(() => {
     if (!m || !plantOpen) return null;
     const shownPlant = shownBlocks.filter(id => inPlant(id));
@@ -472,22 +564,9 @@ export function ModelMap({ scenario, closed, run, busy = false, expectSec = 12, 
     const els = m.elements.filter(e => { const cx = (e.pins[0][0] + e.pins[1][0]) / 2, cy = (e.pins[0][1] + e.pins[1][1]) / 2; return shown(cx, cy); });
     const flags = m.flags.filter(f => shown(f.x, f.y));
     const texts = m.texts.filter(x => shown(x.x, x.y) && !rects[x.text.trim()]);
-    const ports: { x: number; y: number; node: string; box: string; ground: boolean; gap: number }[] = [];
-    const seen = new Set<string>();
-    for (const id of shownPlant) {
-      const r = rects[id]; if (!r) continue;
-      for (const { w, node } of wires) {
-        if (!node) continue;
-        for (const [x, y] of crossings([w[0], w[1]], [w[2], w[3]], r)) {
-          const k = `${Math.round(x)}|${Math.round(y)}`; if (seen.has(k)) continue; seen.add(k);
-          if (ports.some(q => q.node === node && Math.hypot(q.x - x, q.y - y) < 160)) continue;   // the same wire at two close edges
-          ports.push({ x, y, node, box: id, ground: node === '0', gap: Infinity });
-        }
-      }
-    }
-    for (const q of ports) for (const o of ports) if (o !== q) q.gap = Math.min(q.gap, Math.hypot(o.x - q.x, o.y - q.y));
+    const ports = findPorts(wires, shownPlant);
     return { wires, els, flags, texts, ports, hub };
-  }, [m, plantOpen, shownBlocks, open, rects]);
+  }, [m, plantOpen, shownBlocks, open, rects, findPorts]);
 
   // what to plot: nothing until a port, an element, the input u or a dashboard tile is clicked
   // a port (box|node) or a wire's node: e is the node voltage, f the current of the box's flow element on that node
@@ -557,6 +636,35 @@ export function ModelMap({ scenario, closed, run, busy = false, expectSec = 12, 
   const loopStyle = (id: string) => id === 'Target setting' ? FIG.target : id === 'Controller' ? FIG.ctrl : id === 'Rate path' ? FIG.path : id === PLANT ? FIG.plant : id === 'Output' ? FIG.output : null;
   const pathD = (q: number[][]) => 'M' + q.map(p => p.join(' ')).join(' L');
 
+  // ---------------------------------------------------------------- flow and effort marks at the box edges
+  function portMarks(ports: Port[], unit: number, hub: Record<string, string>) {
+    const eff = t.sectors[6];
+    return ports.map((pt, i) => {
+      const id = `${pt.box}|${pt.node}`, c = hub[pt.node] ? colorOf(hub[pt.node]) : t.ink2;
+      const r0 = Math.min(8 * unit, pt.gap / 2.3);
+      if (pt.ground) return <g key={i} className="pm ret"><circle cx={pt.x} cy={pt.y} r={r0 * 0.5} style={{ stroke: t.ink2 }}/><title>{pt.box}: return (ground) wire</title></g>;
+      const onF = sel?.type === 'port' && sel.id === id && sel.q === 'f', onE = sel?.type === 'port' && sel.id === id && sel.q === 'e';
+      // the name runs along the wire (sideways on a wire that crosses a top or bottom edge), so neighbouring ports on
+      // the same edge never overlap; it shows once it is large enough to read
+      const label = pretty(pt.name), fs = r0 * 1.15, wName = label.length * fs * 0.56 + r0 * 1.4;
+      const showName = r0 >= 5.5 * unit, pw = showName ? Math.max(2 * r0, wName) : 2 * r0;
+      const rot = showName && !pt.vert ? `rotate(-90 ${pt.x} ${pt.y})` : undefined;
+      const e = pt.ret ? { x: (pt.x + pt.ret.x) / 2, y: (pt.y + pt.ret.y) / 2 }
+        : pt.vert ? { x: pt.x, y: pt.y + 3.4 * r0 } : { x: pt.x + 3.4 * r0, y: pt.y };
+      return <g key={i} className="pm">
+        <line x1={pt.x} y1={pt.y} x2={pt.ret ? pt.ret.x : e.x} y2={pt.ret ? pt.ret.y : e.y} className={'pm-bridge' + (pt.ret ? '' : ' solo')} style={{ stroke: eff }}/>
+        <g data-port={id} data-q="e" className={'pm-e' + (onE ? ' on' : '')}>
+          <circle cx={e.x} cy={e.y} r={r0 * 0.78} style={{ stroke: eff }}/>
+          {r0 >= 4 * unit && <text x={e.x} y={e.y} fontSize={r0 * 1.05} style={{ fill: eff }}>e</text>}
+          <title>{`Effort e at ${pt.box}: the voltage of node ${pt.node} against ${pt.ret ? 'its return wire' : 'ground'}. Click to plot.`}</title></g>
+        <g data-port={id} data-q="f" className={'pm-f' + (onF ? ' on' : '') + pickCls(id)}>
+          <rect x={pt.x - pw / 2} y={pt.y - r0} width={pw} height={2 * r0} rx={r0} style={{ stroke: c }} transform={rot}/>
+          {r0 >= 4 * unit && <text x={pt.x} y={pt.y} fontSize={showName ? fs : r0 * 1.2} style={{ fill: c }} className={showName ? 'nm' : ''} transform={rot}>{showName ? label : 'f'}</text>}
+          <title>{`Flow f: ${label}, the current over this wire into or out of ${pt.box}. Click to plot; ctrl-click for a transfer function.`}</title></g>
+      </g>;
+    });
+  }
+
   // ---------------------------------------------------------------- the drawing of one box (or all of it)
   function circuit(owner: string | null, k = 1, only = false) {
     const mine = (x: number, y: number) => owner == null || ownerAt(x, y) === owner;
@@ -608,20 +716,21 @@ export function ModelMap({ scenario, closed, run, busy = false, expectSec = 12, 
     const title = TITLE[id];
     const dr = drawingOf(id), r = dr ? rects[dr] : undefined;
     let innerSvg: ReactNode = null;
-    if (isOpen && id === 'Controller' && !ctrlDrawing) {   // the controller as a classic PID
-      const iw = b.w - 24, ih = b.h - HEAD - 66;
+    if (isOpen && id === 'Controller' && !ctrlDrawing) {   // the central bank's rule as a classic PID, in place on the loop
       const pidPick = (part: string) => part === 'r' ? pickCls('B§R') : part === 'e' ? pickCls('B§CPI_filtered') : '';
+      const at = parts ? Math.min(parts.years.length - 1, Math.max(0, Math.round(tNow / (parts.years[1] - parts.years[0])))) : -1;
+      const now: PidNow | undefined = parts && at >= 0 ? { e: parts.series.e?.[at], P: parts.series.P[at], I: parts.series.I[at], D: parts.series.D[at],
+        sat: parts.series.elb[at], r: parts.series.r[at] } : undefined;
       innerSvg = <>
         <rect x={b.x + 1} y={b.y + HEAD} width={b.w - 2} height={b.h - HEAD - 1} style={{ fill: mix(t.panel, FIG.ctrl.fill, 0.67), stroke: 'none' }}/>
-        <svg x={b.x + 12} y={b.y + HEAD + 10} width={iw} height={ih} viewBox={PID_VB} preserveAspectRatio="xMidYMid meet" className="inner-circuit pid-svg">
-          <PidFigure sc={sc} t={t} pick={pidPick} onPart={(part, ctrl) => {
-            const elOf = part === 'r' ? 'B§R' : part === 'e' ? 'B§CPI_filtered' : 'B_PI';
-            if (ctrl) { if (part === 'r' || part === 'e') addPick(elOf); return; }
-            setSel(part === 'r' ? { type: 'instr', id: 'u' } : { type: 'el', id: elOf });
+        <svg x={b.x} y={YC + PID.y0 * PID.s} width={PID.w * PID.s} height={PID.h * PID.s} viewBox={PID_VB} className="inner-circuit pid-svg">
+          <PidFigure sc={sc} t={t} pick={pidPick} now={now} at={now ? tNow : undefined} active={sel?.type === 'pid' ? sel.id : undefined} onPart={(part, ctrl) => {
+            if (ctrl) { if (part === 'r' || part === 'e') addPick(part === 'r' ? 'B§R' : 'B§CPI_filtered'); return; }
+            setSel({ type: 'pid', id: part });
           }}/>
         </svg>
-        <text x={b.x + 16} y={b.y + b.h - 38} fontSize={16} style={{ fill: t.ink2 }}>The rule B_PI of your drawing: r = smoothing of max(r̲, r* + Kp·e + Ki·∫e + Kd·ė). Click a part for its expression and trace; ctrl-click e or r to pick it.</text>
-        <text x={b.x + 16} y={b.y + b.h - 14} fontSize={16} className="link-txt" data-ctrlview="1">Show the LTspice drawing of the Central Bank instead</text>
+        <text x={b.x + 16} y={b.y + b.h - 36} fontSize={15} style={{ fill: t.ink2 }}>The rule B_PI of your drawing: r = smoothing of max(r̲, r* + Kp·e + Ki·∫e + Kd·ė). Click a part for its share of the control effort; ctrl-click e or r to pick it.</text>
+        <text x={b.x + 16} y={b.y + b.h - 13} fontSize={15} className="link-txt" data-ctrlview="1">Show the LTspice drawing of the Central Bank instead</text>
       </>;
     } else if (isOpen && r && leaf && !plantBox) {   // controller / output: their circuit fitted in the grown block
       const vw = r.x2 - r.x1 + 80, vh = r.y2 - r.y1 + 80, iw = b.w - 12, ih = b.h - HEAD - 8, k = Math.max(vw / iw, vh / ih);
@@ -636,7 +745,7 @@ export function ModelMap({ scenario, closed, run, busy = false, expectSec = 12, 
           className="plant-bar" style={{ fill: mix(t.panel, c, 0.32), stroke: c, strokeWidth: selected ? 2.2 : 1.2 }}/>
         <text x={b.x + bar.h * 0.3} y={b.y - bar.h / 2} dominantBaseline="central" fontSize={bar.fs} className="blk-title">{id}</text>
       </> : fig && !isOpen ? <>
-        <text x={b.x + b.w / 2} y={b.y + b.h / 2 - 8} textAnchor="middle" fontSize={27} className="fig-title">{title[0]}</text>
+        <text x={b.x + b.w / 2} y={b.y + b.h / 2 - 8} textAnchor="middle" fontSize={Math.min(27, (b.w - 24) / (title[0].length * 0.56))} className="fig-title">{title[0]}</text>
         <text x={b.x + b.w / 2} y={b.y + b.h / 2 + 22} textAnchor="middle" fontSize={id === PLANT ? 17 : 19} style={{ fill: fig.sub }}>{offLoop ? (id === 'Controller' ? '(ECB) · out of the loop' : '(given) · not used') : title[1]}</text>
       </> : <>
         <path d={`M${b.x} ${b.y + HEAD} V${b.y + 6} Q${b.x} ${b.y} ${b.x + 6} ${b.y} H${b.x + b.w - 6} Q${b.x + b.w} ${b.y} ${b.x + b.w} ${b.y + 6} V${b.y + HEAD} Z`} style={{ fill: fig ? fig.fill : withAlpha(c, 0.3), stroke: c, strokeWidth: 1.2 }}/>
@@ -646,14 +755,17 @@ export function ModelMap({ scenario, closed, run, busy = false, expectSec = 12, 
       {innerSvg}
       {id !== 'Target setting' && id !== 'Rate path' && <g className="blk-toggle" data-toggle={id} transform={plantBox && bar ? `translate(${b.x + bar.w - bar.h / 2} ${b.y - bar.h / 2}) scale(${bar.h * 0.6 / 20})` : `translate(${b.x + b.w - 20} ${b.y + (fig && !isOpen ? 20 : HEAD / 2)})`}>
         <rect x={-10} y={-10} width={20} height={20} rx={3} strokeWidth={1.3}/><path d={'M-5 0 H5' + (isOpen ? '' : ' M0 -5 V5')} strokeWidth={2}/>
-        <title>{isOpen ? `Close ${id}` : `Open ${id}`}</title></g>}
+        <title>{isOpen ? `Close ${disp(id)}` : `Open ${disp(id)}`}</title></g>}
     </g>;
   }
 
   // ---------------------------------------------------------------- the loop of the figure (open or closed)
-  const P = boxOf(PLANT), O = boxOf('Output'), RG = regionOf(P);
-  const yc = CTRL.y + CTRL.h / 2, yr = RATE.y + RATE.h / 2, fbY = RG.y + RG.h + 70;
-  const dx = P.x + P.w / 2, sw = { a: [SWITCH_X - 22, yc], b: [SWITCH_X - 22, yc + 46], p: [SWITCH_X + 22, yc] };
+  const LY = lay.ly, CB = LY.ctrl, RB = LY.rate, P = boxOf(PLANT), O = boxOf('Output'), RG = regionOf(P, LY);
+  const yc = YC, yr = RB.y + RB.h / 2, fbY = RG.y + RG.h + 70;
+  const dx = P.x + P.w / 2, sw = { a: [LY.switchX - 22, yc], b: [LY.switchX - 22, yc + 46], p: [LY.switchX + 22, yc] };
+  // a loop signal's letter in a dot on its line, as the flows' names are in dots on the economy's wires
+  const sym = (x: number, y: number, s: string, red = false) => <g className={'sigdot' + (red ? ' red' : '')}><circle cx={x} cy={y} r={17}/><text x={x} y={y + 1}>{s}</text></g>;
+  const loopTip = closed ? 'Loop closed: click to open it (the rate follows the given path)' : 'Loop open: click to close it (the central bank’s rule sets the rate)';
   const on = (live: boolean) => live ? '' : ' off';
   const L = (d: string, cls = '') => <path d={d} className={'figline' + cls} markerEnd="url(#fig-ah)"/>;
   const lab = (x: number, y: number, s: string, cls = 'figlab', anchor: 'middle' | 'start' | 'end' = 'middle') => <text x={x} y={y} textAnchor={anchor} className={cls}>{s}</text>;
@@ -662,7 +774,7 @@ export function ModelMap({ scenario, closed, run, busy = false, expectSec = 12, 
   const selBlock = sel?.type === 'block' ? sel.id : undefined;
   const el = sel?.type === 'el' ? m.elements.find(e => e.name === sel.id) : undefined;
   const dashOf = (name: string) => dash.find(d => d.name === name);
-  const crumbs = ['Feedback loop', ...trail];
+  const crumbs = ['Feedback loop', ...trail.map(disp)];
   const imported = dash.filter(d => !d.constant);   // the fixed ones are in the Changeable model variables panel
   const groups = [...new Set(imported.map(d => d.group))];
   // the time window applied to a trace (charts) and to the dashboard series
@@ -677,7 +789,7 @@ export function ModelMap({ scenario, closed, run, busy = false, expectSec = 12, 
         {whole ? <span className="crumbs"><b>Whole circuit</b></span> : <nav className="crumbs" aria-label="Layers">{crumbs.map((p, i) => <span key={p}>{i > 0 && <span className="sep">›</span>}
           <button className={'link-btn' + (i === crumbs.length - 1 ? ' here' : '')} onClick={() => crumb(i)}>{p}</button></span>)}</nav>}
         <div className="map-tools">
-          <span className={`mode ${closed ? 'closed' : 'open'}`}>{closed ? 'closed loop' : 'open loop'}</span>
+          <button className={`mode ${closed ? 'closed' : 'open'}`} disabled={!onLoop} onClick={() => onLoop?.(!closed)} title={closed ? 'Click to open the loop (the rate follows the given path)' : 'Click to close the loop (the central bank’s rule sets the rate)'}>{closed ? 'closed loop' : 'open loop'} ⇄</button>
           <div className="win" role="group" aria-label="Time window">
             <span className="small">Time</span>
             <input type="range" min={0} max={T_END} step={0.25} value={win[0]} aria-label="From (years)" onChange={e => { const v = Math.min(Number(e.target.value), win[1] - 0.25); setWin([v, win[1]]); }}/>
@@ -703,11 +815,11 @@ export function ModelMap({ scenario, closed, run, busy = false, expectSec = 12, 
             <input type="range" min={0} max={T_END} step={0.05} value={tNow} aria-label="Moment shown (years)" disabled={!wf} onChange={e => { setPlaying(false); setTNow(Number(e.target.value)); }}/>
           </div>
           <output className="small">{wf ? `t = ${tNow.toFixed(1)} of ${T_END.toFixed(1)} yr` : run ? 'loading the currents…' : 'run a simulation first'}</output>
-          {wf && !plantOpen && <span className="small tb-hint">open the <b>Plant</b> (+) to see the currents move over its wires</span>}
+          {wf && !plantOpen && <span className="small tb-hint">open the <b>Eurozone-Economy</b> (+) to see the currents move over its wires</span>}
           {wfError && <span className="small tb-error" title={wfError}>{/404|Not Found/i.test(wfError) ? 'The server is older than this page: restart start_monetary.cmd to see the currents.' : `Currents not available: ${wfError}`}</span>}
         </>}
       </div>
-      <p className="muted note">Click <b>+</b> to open a block: the plant is your drawing, with each agent's circuit under its box; opening a box lifts it (Banks and NFC first show their sub-agents). The wires between the agents are your own. Click a port mark <b>f</b> on a box edge, a wire, the input u, an element or a dashboard tile to plot it. <b>Ctrl-click two flows</b> (elements, port marks or the loop signals u, π, π*, d) for the transfer function from the first to the second; Esc clears. The loop follows the Open / Closed switch on the left.</p>
+      <p className="muted note">Click <b>+</b> to open a block: the plant is your drawing, with each agent's circuit under its box; opening a box lifts it (Banks and NFC first show their sub-agents). The wires between the agents are your own. At a box edge the flow over a wire is a dot with its name (<b>f</b>), the effort between the wire and its return is <b>e</b>: click either to plot it, or a wire, an element, u. <b>Ctrl-click two flows</b> (elements, flow dots or the loop signals u, π, π*, d) for the transfer function from the first to the second; Esc clears. Click a <b>switch</b> in the loop (or the open/closed badge) to open or close the loop.</p>
       <svg ref={svg} className="schem blockmap" viewBox={vb.join(' ')} preserveAspectRatio="xMidYMid meet" role="img" aria-label="Circuit map"
         onPointerDown={e => { if (e.button === 0) drag.current = { x: e.clientX, y: e.clientY, vb, moved: false }; }}
         onPointerMove={e => {
@@ -724,9 +836,10 @@ export function ModelMap({ scenario, closed, run, busy = false, expectSec = 12, 
           const hit = document.elementFromPoint(e.clientX, e.clientY) as Element | null;
           const tg = hit?.closest('[data-toggle]'), elh = hit?.closest('[data-el]'), pm = hit?.closest('[data-port]'), wn = hit?.closest('[data-node]'), ins = hit?.closest('[data-instr]'), bl = hit?.closest('[data-block]');
           if (hit?.closest('[data-pid]')) return;   // the PID figure handles its own clicks
+          if (hit?.closest('[data-loopswitch]')) { onLoop?.(!closed); return; }   // a switch opens or closes the loop
           if (hit?.closest('[data-ctrlview]')) { setCtrlDrawing(v => !v); return; }
           if (e.ctrlKey || e.metaKey) {   // ctrl-click: pick a flow for the transfer function
-            const carrier = pm ? (() => { const [box, node] = pm.getAttribute('data-port')!.split('|');
+            const carrier = pm && pm.getAttribute('data-q') !== 'e' ? (() => { const [box, node] = pm.getAttribute('data-port')!.split('|');
               return m!.elements.find(x => x.nodes.includes(node) && (x.sector === box || (!!x.sector && within(box, x.sector))) && ['inductor', 'behavioural current', 'current source'].includes(x.kind))?.name; })() : undefined;
             const picked = elh ? elh.getAttribute('data-el')! : ins ? INSTR_EL[ins.getAttribute('data-instr')!] : carrier;
             if (picked) addPick(picked);
@@ -735,7 +848,7 @@ export function ModelMap({ scenario, closed, run, busy = false, expectSec = 12, 
           if (tg) toggle(tg.getAttribute('data-toggle')!);
           else if (hit?.closest('[data-scrim]') && loopLeaf) toggle(loopLeaf);
           else if (elh) setSel({ type: 'el', id: elh.getAttribute('data-el')! });
-          else if (pm) setSel({ type: 'port', id: pm.getAttribute('data-port')!, q: 'f' });
+          else if (pm) setSel({ type: 'port', id: pm.getAttribute('data-port')!, q: pm.getAttribute('data-q') === 'e' ? 'e' : 'f' });
           else if (wn && wn.getAttribute('data-node')) setSel({ type: 'node', id: wn.getAttribute('data-node')!, q: 'e' });
           else if (ins) { const id = ins.getAttribute('data-instr')!; setSel(id === 'd' ? { type: 'el', id: 'B§Shock' } : id === 'pi*' ? { type: 'el', id: 'B§Target_CPI' } : id === 'pi' ? { type: 'el', id: 'B§CPI_filtered' } : id === 'P' ? { type: 'el', id: 'B§P' } : { type: 'instr', id }); }
           else if (bl) { const id = bl.getAttribute('data-block')!; setSel(id === 'Rate path' ? { type: 'instr', id: 'u' } : { type: 'block', id }); }
@@ -745,36 +858,40 @@ export function ModelMap({ scenario, closed, run, busy = false, expectSec = 12, 
         <defs>
           <marker id="fig-ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 Z" fill="context-stroke"/></marker>
         </defs>
-        {whole ? circuit(null) : <>
-          <rect x={RG.x} y={RG.y} width={RG.w} height={RG.h} rx={10} className="fig-region" style={{ fill: withAlpha(FIG.region.fill, 0.55), stroke: FIG.region.stroke }}/>
-          <text x={RG.x + RG.w / 2} y={RG.y + RG.h - 18} textAnchor="middle" className="fig-region-title">ECB macroeconomic models</text>
+        {whole ? <>{circuit(null)}<g className="plant-ports">{portMarks(wholePorts, px, hubOf)}</g></> : <>
           <g className="figloop">
-            <g data-instr="pi*" className={"figsig" + pickCls(INSTR_EL["pi*"])}>{L(`M${TARGET.x + TARGET.w} ${SUM.y} H${SUM.x - SUM.r}`)}{lab((TARGET.x + TARGET.w + SUM.x - SUM.r) / 2, SUM.y - 12, 'π*', 'figsym')}{lab((TARGET.x + TARGET.w + SUM.x) / 2, SUM.y + 30, 'Setpoint')}{lab((TARGET.x + TARGET.w + SUM.x) / 2, SUM.y + 50, '(Target)')}</g>
+            <g data-instr="pi*" className={"figsig" + pickCls(INSTR_EL["pi*"])}>{L(`M${TARGET.x + TARGET.w} ${SUM.y} H${SUM.x - SUM.r}`)}{sym((TARGET.x + TARGET.w + SUM.x - SUM.r) / 2, SUM.y, 'π*')}{lab((TARGET.x + TARGET.w + SUM.x) / 2, SUM.y + 30, 'Setpoint')}{lab((TARGET.x + TARGET.w + SUM.x) / 2, SUM.y + 50, '(Target)')}</g>
             <circle cx={SUM.x} cy={SUM.y} r={SUM.r} className="fig-sum"/>
             <path d={`M${SUM.x - SUM.r * 0.7} ${SUM.y - SUM.r * 0.7} L${SUM.x + SUM.r * 0.7} ${SUM.y + SUM.r * 0.7} M${SUM.x + SUM.r * 0.7} ${SUM.y - SUM.r * 0.7} L${SUM.x - SUM.r * 0.7} ${SUM.y + SUM.r * 0.7}`} className="fig-sumx"/>
             {lab(SUM.x - SUM.r - 6, SUM.y - SUM.r - 4, '+', 'figsign', 'end')}{lab(SUM.x - SUM.r - 6, SUM.y + SUM.r + 18, '−', 'figsign', 'end')}
-            <g>{L(`M${SUM.x + SUM.r} ${SUM.y} H${CTRL.x}`, on(closed))}{lab((SUM.x + CTRL.x) / 2, SUM.y - 12, 'e', 'figsym')}{lab((SUM.x + CTRL.x) / 2, SUM.y + 30, 'Error')}</g>
+            <g>{L(`M${SUM.x + SUM.r} ${SUM.y} H${CB.x}`, on(closed))}{sym((SUM.x + CB.x) / 2, SUM.y, 'e')}{lab((SUM.x + CB.x) / 2, SUM.y + 40, 'Error')}</g>
             {/* u: from the controller (closed loop) or the given rate path (open loop), selected by the switch */}
-            <path d={`M${CTRL.x + CTRL.w} ${yc} H${sw.a[0]}`} className={'figline' + on(closed)}/>
-            <path d={`M${RATE.x + RATE.w} ${yr} H${sw.b[0]} V${sw.b[1]}`} className={'figline' + on(!closed)}/>
-            <g className="fig-switch"><circle cx={sw.a[0]} cy={sw.a[1]} r={4}/><circle cx={sw.b[0]} cy={sw.b[1]} r={4}/><circle cx={sw.p[0]} cy={sw.p[1]} r={4}/>
+            <path d={`M${CB.x + CB.w} ${yc} H${sw.a[0]}`} className={'figline' + on(closed)}/>
+            <path d={`M${RB.x + RB.w} ${yr} H${sw.b[0]} V${sw.b[1]}`} className={'figline' + on(!closed)}/>
+            <g className="fig-switch" data-loopswitch="1"><title>{loopTip}</title>
+              <rect x={sw.a[0] - 30} y={sw.a[1] - 30} width={sw.p[0] - sw.a[0] + 60} height={sw.b[1] - sw.a[1] + 60} className="switch-hit"/>
+              <circle cx={sw.a[0]} cy={sw.a[1]} r={4}/><circle cx={sw.b[0]} cy={sw.b[1]} r={4}/><circle cx={sw.p[0]} cy={sw.p[1]} r={4}/>
               <line x1={sw.p[0]} y1={sw.p[1]} x2={closed ? sw.a[0] + 4 : sw.b[0] + 3} y2={closed ? sw.a[1] : sw.b[1] - 3} className="lever"/>
-              {lab(sw.p[0], sw.b[1] + 30, closed ? 'u from the controller' : 'u from the rate path', 'figlab small')}</g>
+              {lab(sw.p[0], sw.b[1] + 30, closed ? 'u from the central bank · click to open' : 'u from the rate path · click to close', 'figlab small')}</g>
             <g data-instr="u" className={'figsig' + (sel?.type === 'instr' ? ' on' : '') + pickCls('B§R')}>
               <path d={`M${sw.p[0]} ${yc} H${P.x}`} className="figsig-hit"/>{L(`M${sw.p[0] + 4} ${yc} H${P.x}`)}
-              {lab((sw.p[0] + P.x) / 2, yc - 12, 'u', 'figsym')}{lab((sw.p[0] + P.x) / 2, yc + 26, 'policy rate r', 'figlab small')}
+              {sym((sw.p[0] + P.x) / 2, yc, 'u')}{lab((sw.p[0] + P.x) / 2, yc + 38, 'policy rate r', 'figlab small')}
             </g>
-            <g data-instr="d" className={"figsig dist" + pickCls(INSTR_EL["d"])}>{L(`M${dx} ${P.y - 190} V${P.y}`, ' red')}{lab(dx + 12, P.y - 110, 'd', 'figsym red', 'start')}
+            <g data-instr="d" className={"figsig dist" + pickCls(INSTR_EL["d"])}>{L(`M${dx} ${P.y - 190} V${P.y}`, ' red')}{sym(dx, P.y - 100, 'd', true)}
               {lab(dx - 14, P.y - 150, 'Disturbance', 'figlab red', 'end')}{lab(dx - 14, P.y - 126, '(Economic shock)', 'figlab red', 'end')}</g>
-            <g data-instr="P" className={"figsig" + pickCls(INSTR_EL["P"])}>{L(`M${P.x + P.w} ${O.y + O.h / 2} H${O.x}`)}{lab((P.x + P.w + O.x) / 2, O.y + O.h / 2 - 12, 'P', 'figsym')}</g>
+            <g data-instr="P" className={"figsig" + pickCls(INSTR_EL["P"])}>{L(`M${P.x + P.w} ${O.y + O.h / 2} H${O.x}`)}{sym((P.x + P.w + O.x) / 2, O.y + O.h / 2, 'P')}</g>
             <g data-instr="pi" className={"figsig" + pickCls(INSTR_EL["pi"])}>
-              {closed ? L(`M${O.x + O.w / 2} ${O.y + O.h} V${fbY} H${SUM.x} V${SUM.y + SUM.r}`)
+              {closed ? <><path d={`M${O.x + O.w / 2} ${O.y + O.h} V${fbY} H${swx + 24}`} className="figline"/>{L(`M${swx - 24} ${fbY} H${SUM.x} V${SUM.y + SUM.r}`)}</>
                 : <>{/* open loop: the feedback is cut at the switch */}
                   <path d={`M${O.x + O.w / 2} ${O.y + O.h} V${fbY} H${swx + 24}`} className="figline"/>
                   <path d={`M${swx - 24} ${fbY} H${SUM.x} V${SUM.y + SUM.r}`} className="figline off" markerEnd="url(#fig-ah)"/>
-                  <g className="fig-switch"><circle cx={swx - 24} cy={fbY} r={4}/><circle cx={swx + 24} cy={fbY} r={4}/><line x1={swx + 24} y1={fbY} x2={swx - 18} y2={fbY - 26} className="lever"/></g>
-                  {lab(swx, fbY + 30, 'loop open', 'figlab small')}</>}
-              {lab((SUM.x + O.x) / 2 + 150, fbY - 12, 'π', 'figsym')}
+                  <g className="fig-switch" data-loopswitch="1"><title>{loopTip}</title><rect x={swx - 50} y={fbY - 50} width={100} height={80} className="switch-hit"/>
+                    <circle cx={swx - 24} cy={fbY} r={4}/><circle cx={swx + 24} cy={fbY} r={4}/><line x1={swx + 24} y1={fbY} x2={swx - 18} y2={fbY - 26} className="lever"/>
+                    {lab(swx, fbY + 30, 'loop open · click to close', 'figlab small')}</g></>}
+              {closed && <g className="fig-switch" data-loopswitch="1"><title>{loopTip}</title><rect x={swx - 50} y={fbY - 40} width={100} height={70} className="switch-hit"/>
+                <circle cx={swx - 24} cy={fbY} r={4}/><circle cx={swx + 24} cy={fbY} r={4}/><line x1={swx + 24} y1={fbY} x2={swx - 20} y2={fbY} className="lever"/>
+                {lab(swx, fbY + 30, 'loop closed · click to open', 'figlab small')}</g>}
+              {sym((SUM.x + O.x) / 2 + 150, fbY, 'π')}
             </g>
           </g>
           {/* the plant block, then its circuit as drawn, then the plant's boxes (closed ones cover their part), then the ports */}
@@ -820,14 +937,7 @@ export function ModelMap({ scenario, closed, run, busy = false, expectSec = 12, 
           {shownBlocks.filter(id => inPlant(id) && open.includes(id)).map(block)}
           {shownBlocks.filter(id => inPlant(id) && !open.includes(id)).map(block)}
           {plantDraw && <svg x={geo.P_OPEN.x} y={geo.P_OPEN.y + HEAD} width={geo.VIEW.w * K} height={geo.VIEW.h * K} viewBox={`${geo.VIEW.x} ${geo.VIEW.y} ${geo.VIEW.w} ${geo.VIEW.h}`} className="plant-ports">
-            {plantDraw.ports.map((pt, i) => {
-              const r0 = Math.min(7 * px / K, pt.gap / 2.3), hubA = plantDraw.hub[pt.node], c = hubA ? colorOf(hubA) : t.ink2, onP = sel?.type === 'port' && sel.id === `${pt.box}|${pt.node}`;
-              return <g key={i} data-port={`${pt.box}|${pt.node}`} className={'port-mark' + (pt.ground ? ' ret' : '') + (onP ? ' on' : '')}>
-                <circle cx={pt.x} cy={pt.y} r={pt.ground ? r0 * 0.55 : r0} style={{ stroke: c }}/>
-                {!pt.ground && r0 * K / px >= 4 && <text x={pt.x} y={pt.y} fontSize={r0 * 1.25} style={{ fill: c }}>f</text>}
-                <title>{pt.ground ? `${pt.box}: return (ground)` : `${pt.box} · node ${pt.node}: click for its flow f and effort e`}</title>
-              </g>;
-            })}
+            {portMarks(plantDraw.ports, px / K, plantDraw.hub)}
           </svg>}
           {pulse && <g key={pulse.seq} className="locate-pulse" aria-hidden="true">
             <circle cx={pulse.x} cy={pulse.y} r={pulse.r} className="lp-ring"/>
@@ -873,7 +983,7 @@ export function ModelMap({ scenario, closed, run, busy = false, expectSec = 12, 
           </div>
         </>)}
       </section>}
-      <p className="muted note legend-line">Wires as in your .asc: coloured by the agent that holds the node (the hub of its flows), grey for the return (ground) · <b>f</b> marks: a flow wire crossing an agent's edge, small rings: its return · loop blocks in the colours of the ECB figure</p>
+      <p className="muted note legend-line">Wires as in your .asc: coloured by the agent that holds the node (the hub of its flows), grey for the return (ground) · a dot with a name: the flow f over a wire crossing an agent's edge · <b>e</b> on the violet line between the flow wire and its return (small ring): the effort · loop blocks in the colours of the ECB figure</p>
 
       {vars}
       {/* the dashboard: the current sources outside the plant boxes, which the plant imports */}
@@ -924,7 +1034,27 @@ export function ModelMap({ scenario, closed, run, busy = false, expectSec = 12, 
             <ul className="conn">{portSel.onNode.map(e => <li key={e.name}><button className="link-btn" onClick={() => setSel({ type: 'el', id: e.name })}>{e.ref}</button>
               <small className="muted"> {e.kind}{e.sector ? ` · ${blockOfDrawing(e.sector)}` : ''}</small></li>)}</ul>
           </>}
-        </> : sel.type === 'instr' ? <>
+        </> : sel.type === 'pid' ? (() => {
+          const info = PID_PART[sel.id] ?? PID_PART.P;
+          if (!parts) return <><h3>{info.title}</h3><p className="small">{info.about}</p><p className="muted note">{run ? 'Loading the parts of the rule…' : 'Run a simulation first.'}</p></>;
+          const x = parts.years, S = parts.series, w = (k: string) => inWin(x, S[k]);
+          const grey = t.muted, hi = t.rate;
+          const lines = sel.id === 'r' || sel.id === 'smooth'
+            ? [{ name: 'rule output (before smoothing)', ...w('rule'), color: sel.id === 'smooth' ? grey : grey, width: 1.6 }, { name: 'policy rate r', ...w('r'), color: hi, width: 2.6 }]
+            : sel.id === 'e' ? [{ name: 'error e', ...w('e'), color: hi, width: 2.6 }]
+            : (['r_star', 'P', 'I', 'D', 'elb'] as const).filter(k => k !== 'elb' || sel.id === 'sat' || S.elb.some(v => Math.abs(v) > 1e-6))
+                .map(k => ({ name: { r_star: 'r*', P: 'P', I: 'I', D: 'D', elb: 'lower bound' }[k], ...w(k), color: k === info.key ? hi : grey, width: k === info.key ? 2.8 : 1.3 }));
+          const s = S[info.key], at = Math.min(x.length - 1, Math.max(0, Math.round(tNow / (x[1] - x[0])))), endV = s[s.length - 1];
+          const share = sel.id === 'P' || sel.id === 'I' || sel.id === 'D' || sel.id === 'rstar' || sel.id === 'sat';
+          return <>
+            <h3>{info.title}</h3>
+            <p className="small">{info.about}</p>
+            {!parts.closed && share && <p className="notice warn small">Open loop: the rate follows the given path, so these parts are what the rule would ask, not what the economy gets.</p>}
+            <p className="small"><b>{s[at] >= 0 ? '+' : '−'}{Math.abs(s[at]).toFixed(3)} %</b> at t = {tNow.toFixed(1)} yr · <b>{endV >= 0 ? '+' : '−'}{Math.abs(endV).toFixed(3)} %</b> at the end{share ? ` · rule output at the end ${S.rule[S.rule.length - 1].toFixed(3)} %` : ''}</p>
+            <Chart title={share ? 'Share of the control effort (%)' : info.title} unit="%" height={230} group={null} markers={nowMark} lines={lines} hoverFormat=".3f"/>
+            {share && <p className="muted note">r* + P + I + D (+ the lower bound) is the rule’s output; each part is its own source in the run netlist (B§PI_P, B§PI_I, B§PI_Dterm), so these are simulated values.</p>}
+          </>;
+        })() : sel.type === 'instr' ? <>
           <h3>u: the policy rate r</h3>
           <p className="muted small">The plant's input, element <code>B§R</code>: {closed ? 'set by the controller (the rule B_PI through the smoothing R15·C8): closed loop.' : 'the given rate path (base rate, then a step; the sliders on the left): open loop, the controller is out of the loop.'}</p>
           {traceBusy ? <p className="muted note">Simulating…</p> : trace ? <Chart title={trace.trace} unit="rate" height={220} group={null} lines={[{ name: 'u = r', x: wTrace!.x, y: wTrace!.y, color: FIG.ctrl.stroke }]}/> : null}

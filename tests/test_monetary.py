@@ -340,3 +340,19 @@ def test_changeable_model_variables():
         Scenario(constants={"R_for": 5.0})
     base, low = run(Scenario()), run(s)
     assert base["series"]["I(Investment)"]["values"][-1] != pytest.approx(low["series"]["I(Investment)"]["values"][-1], rel=1e-4)
+
+
+def test_rule_split_into_parts():
+    """B_PI is written as r* + P + I + D with each part its own source (netlist.PI_SPLIT): the parts add up to the
+    rule's output (no lower bound reached in the default runs) and P = Kp e."""
+    import numpy as np
+    from monetary import netlist as nl
+    from monetary.scenario import Scenario, build, controller_parts
+    for closed in (False, True):
+        lines = build(Scenario(closed=closed))
+        assert nl.PI_SPLIT in lines and any(l.startswith("B§PI_I 0 0 I=") for l in lines)
+    s = Scenario(closed=True)
+    r = controller_parts(s)["series"]
+    total = np.array(r["r_star"]) + np.array(r["P"]) + np.array(r["I"]) + np.array(r["D"]) + np.array(r["elb"])
+    assert np.allclose(total, r["rule"], atol=1e-6)
+    assert np.allclose(r["P"], s.kp * np.array(r["e"]), atol=1e-4)

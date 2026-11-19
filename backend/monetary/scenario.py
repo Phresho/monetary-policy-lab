@@ -95,6 +95,7 @@ def build(s: Scenario) -> list[str]:
     policy = nl.Policy(closed=s.closed, kp=s.kp, ki=s.ki, kd=s.kd,
                        derivative=s.derivative if s.closed else "netlist", tau_d=s.tau_d)
     lines = nl.build(policy, steady_start=s.steady_start)
+    nl.split_rule(lines)   # P, I and D as their own sources: each part's share of the control effort is a trace
     nl.set_param(lines, "R_star", s.r_star / 100)
     nl.set_param(lines, "t_start", s.t_start)
     nl._replace(lines, TARGET_OLD, f"B§Target_CPI 0 0 I={s.target_pct / 100:.8g}")
@@ -160,6 +161,27 @@ def dashboard_values(s: Scenario) -> dict:
         if k is not None:
             series[d["name"]] = [round(float(v), 8) for v in np.interp(t, traces["time"], traces[k])]
     return {"years": (t / UNITS_PER_YEAR).round(5).tolist(), "series": series}
+
+
+def controller_parts(s: Scenario) -> dict:
+    """Each part's share of the control effort over the scenario's run, in %: the error e = pi_f - pi*, the neutral rate r*, P = Kp e, I (the
+    limited integral), D (the limited derivative), their sum, what the lower bound adds (max(-0.5 %, sum) - sum), the
+    rule's output V(n_pi) and the policy rate r after the smoothing R15 C8. The parts are their own sources in the run
+    netlist (netlist.PI_SPLIT), so these are the simulated values, not a reconstruction."""
+    traces = recent_traces(s)
+    low = {k.lower(): k for k in traces}
+    t = np.linspace(0, T_STOP, POINTS)
+
+    def get(name: str) -> np.ndarray:
+        return np.interp(t, traces["time"], traces[low[name.lower()]]) * 100
+    p, i, d, rule, r = get("I(PI_P)"), get("I(PI_I)"), get("I(PI_Dterm)"), get("V(n_pi)"), get("I(R)")
+    e = get("I(CPI_filtered)") - get("I(Target_CPI)")
+    rstar = np.full_like(t, s.r_star)
+    total = rstar + p + i + d
+    rnd = lambda a: [round(float(v), 6) for v in a]
+    return {"years": [round(float(v / UNITS_PER_YEAR), 5) for v in t], "closed": s.closed,
+            "series": {"e": rnd(e), "r_star": rnd(rstar), "P": rnd(p), "I": rnd(i), "D": rnd(d), "sum": rnd(total),
+                       "elb": rnd(rule - total), "rule": rnd(rule), "r": rnd(r)}}
 
 
 def element_trace(s: Scenario, element: str) -> dict:

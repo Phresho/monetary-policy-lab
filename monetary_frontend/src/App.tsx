@@ -93,7 +93,10 @@ export default function App() {
     } catch (e) { setError(e instanceof Error ? e.message : String(e)); }
     finally { setBusy(false); }
   }
-  useEffect(() => { if (s && !runs.length && !busy) void simulate(s); }, [s]);  // first run with the defaults
+  useEffect(() => { if (s && !runs.length && !busy) void simulate(s); }, [s]);
+  // a loop switch clicked on the map during a run: the switch flips at once, the run follows when the current one ends
+  const pendingRun = useRef(false);
+  useEffect(() => { if (!busy && pendingRun.current && runs.length) { pendingRun.current = false; void simulate(); } }, [busy]);  // first run with the defaults
 
   const markers = useMemo<Marker[]>(() => {
     const sc = run?.scenario; if (!sc) return [];
@@ -154,7 +157,8 @@ export default function App() {
       </aside>}
       <main className="centre">
         {error && <p className="notice bad">{error}</p>}
-        <ModelMap scenario={run?.scenario ?? s} closed={run?.scenario.closed ?? s.closed} run={run} busy={busy} expectSec={run?.seconds ?? 12} locate={locate}/>
+        <ModelMap scenario={run?.scenario ?? s} closed={s.closed} run={run} busy={busy} expectSec={run?.seconds ?? 12} locate={locate}
+          onLoop={c => { const next = { ...s, closed: c }; setS(next); if (busy) pendingRun.current = true; else void simulate(next); }}/>
       </main>
       {!rightOpen ? <aside className="panel rail right" aria-label="Results (folded in)">
         <button className="ghost icon" onClick={() => setRightOpen(true)} title="Show the results" aria-label="Show the results" aria-expanded={false}>«</button>

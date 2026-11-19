@@ -27,7 +27,7 @@ from . import frequency as fq, ngspice as ng
 from .scenario import Scenario, UNITS_PER_YEAR
 
 RATE, PI, TARGET = "B§R", "I(CPI_filtered)", "B§Target_CPI"
-CONTROLLER = {"B_PI", "B§PI_D", "R15", "C8"}
+CONTROLLER = {"B_PI", "B§PI_P", "B§PI_I", "B§PI_Dterm", "B§PI_D", "R15", "C8"}
 INJ = "n_tfinj"
 
 

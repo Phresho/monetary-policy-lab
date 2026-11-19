@@ -99,6 +99,16 @@ def create_app() -> FastAPI:
             except (RuntimeError, ValueError, OSError) as error:
                 raise HTTPException(422, f"Simulation failed: {error}") from error
 
+    @app.post("/api/controller/parts")
+    def controller_parts(scenario: Scenario):
+        """Each part of the policy rule (r*, P, I, D, the lower bound) over the run: its share of the control effort."""
+        from .scenario import controller_parts as parts
+        with SLOTS:
+            try:
+                return parts(scenario)
+            except (RuntimeError, ValueError, OSError, KeyError) as error:
+                raise HTTPException(422, f"Simulation failed: {error}") from error
+
     @app.post("/api/trace")
     def trace(request: TraceRequest):
         from .scenario import element_trace
